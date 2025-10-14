@@ -100,11 +100,37 @@ export const MessagePanel = () => {
             }
 
             try {
-              // Get the entity first to ensure proper ID format
-              const entity = await client.getEntity(group.telegram_id.toString());
-              
-              // Send the actual message
-              await client.sendMessage(entity, { message });
+              // Resolve entity robustly: prefer username, then cached dialogs by id, then fallback
+              let target: any = null;
+
+              if (group.username) {
+                try {
+                  target = await client.getEntity(group.username);
+                } catch (_) {}
+              }
+
+              if (!target) {
+                try {
+                  const dialogs: any[] = await client.getDialogs({ limit: 500 });
+                  const match = dialogs.find((d: any) => {
+                    const ent = d?.entity;
+                    return (
+                      ent && (
+                        String(ent.id) === String(group.telegram_id) ||
+                        (group.username && ent.username && ent.username.toLowerCase() === String(group.username).toLowerCase())
+                      )
+                    );
+                  });
+                  if (match?.entity) target = match.entity;
+                } catch (_) {}
+              }
+
+              if (!target) {
+                // Final fallback: try resolving by numeric id as string
+                target = await client.getEntity(String(group.telegram_id));
+              }
+
+              await client.sendMessage(target, { message });
               
               // Log success
               await supabase.from('message_logs').insert({
@@ -120,7 +146,7 @@ export const MessagePanel = () => {
                 group_id: group.id,
                 message_text: message,
                 status: 'error',
-                error_message: error.message
+                error_message: error?.message || 'Unknown error'
               });
               console.error('Message send error:', error);
             }
