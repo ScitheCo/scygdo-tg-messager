@@ -172,13 +172,13 @@ export const MessagePanel = () => {
   };
 
   return (
-    <div className="bg-card rounded-xl p-6 border border-border h-full flex flex-col">
+    <div className="bg-card rounded-xl p-6 border border-border flex flex-col">
       <div className="flex items-center gap-2 mb-4">
         <Send className="w-5 h-5 text-primary" />
         <h2 className="text-lg font-semibold text-foreground">Mesaj Gönder</h2>
       </div>
 
-      <div className="flex-1 flex flex-col gap-4">
+      <div className="flex flex-col gap-4">
         <Textarea
           placeholder="Mesajınızı buraya yazın..."
           value={message}
