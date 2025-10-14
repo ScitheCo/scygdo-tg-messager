@@ -27,7 +27,7 @@ serve(async (req) => {
       const { Api } = await import('https://esm.sh/telegram@2.22.2')
       
       const client = new TelegramClient(
-        new StringSession(''),
+        new StringSession(),
         parseInt(api_id),
         api_hash,
         { connectionRetries: 5 }
@@ -62,7 +62,7 @@ serve(async (req) => {
       const { Api } = await import('https://esm.sh/telegram@2.22.2')
       
       const client = new TelegramClient(
-        new StringSession(''),
+        new StringSession(),
         parseInt(api_id),
         api_hash,
         { connectionRetries: 5 }
