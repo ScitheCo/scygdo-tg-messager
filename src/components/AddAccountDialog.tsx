@@ -21,13 +21,15 @@ interface AddAccountDialogProps {
 export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
   const { user } = useAuth();
   const [open, setOpen] = useState(false);
-  const [step, setStep] = useState<'phone' | 'otp'>('phone');
+  const [step, setStep] = useState<'phone' | 'otp' | '2fa'>('phone');
   const [phoneNumber, setPhoneNumber] = useState('');
   const [selectedApiId, setSelectedApiId] = useState('');
   const [otp, setOtp] = useState('');
+  const [password2fa, setPassword2fa] = useState('');
   const [phoneCodeHash, setPhoneCodeHash] = useState('');
   const [accountId, setAccountId] = useState('');
   const [loading, setLoading] = useState(false);
+  const [telegramClient, setTelegramClient] = useState<TelegramClient | null>(null);
 
   const { data: apiCredentials } = useQuery({
     queryKey: ['telegram-api-credentials'],
@@ -102,8 +104,6 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
         })
       );
 
-      await client.disconnect();
-
       // Access phoneCodeHash from the result
       const phoneCodeHashValue = 'phoneCodeHash' in result ? (result as any).phoneCodeHash : '';
       if (!phoneCodeHashValue) {
@@ -111,6 +111,7 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
       }
       
       setPhoneCodeHash(phoneCodeHashValue);
+      setTelegramClient(client); // Keep client alive for OTP verification
       setStep('otp');
       toast.success('Doğrulama kodu Telegram\'a gönderildi');
     } catch (error: any) {
@@ -133,31 +134,16 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
       return;
     }
 
+    if (!telegramClient) {
+      toast.error('Telegram bağlantısı bulunamadı. Lütfen tekrar deneyin.');
+      setStep('phone');
+      return;
+    }
+
     setLoading(true);
 
     try {
-      // Get API credentials again
-      const { data: apiCred, error: apiError } = await supabase
-        .from('telegram_api_credentials')
-        .select('*')
-        .eq('id', selectedApiId)
-        .single();
-
-      if (apiError || !apiCred) throw new Error('API bilgileri alınamadı');
-
-      // Create Telegram client and verify code directly from frontend
-      const client = new TelegramClient(
-        new StringSession(''),
-        parseInt(apiCred.api_id),
-        apiCred.api_hash,
-        {
-          connectionRetries: 5,
-        }
-      );
-
-      await client.connect();
-
-      const authResult = await client.invoke(
+      const authResult = await telegramClient.invoke(
         new Api.auth.SignIn({
           phoneNumber: phoneNumber,
           phoneCodeHash: phoneCodeHash,
@@ -165,10 +151,77 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
         })
       );
 
-      // Get session string
-      const sessionString = client.session.save() as unknown as string;
+      // Check if 2FA is required
+      if (authResult.className === 'auth.Authorization') {
+        // Success - no 2FA required
+        const sessionString = telegramClient.session.save() as unknown as string;
+        await telegramClient.disconnect();
 
-      await client.disconnect();
+        // Update account with session string and activate it
+        const { error: updateError } = await supabase
+          .from('telegram_accounts')
+          .update({
+            session_string: sessionString,
+            is_active: true
+          })
+          .eq('id', accountId);
+
+        if (updateError) throw updateError;
+
+        toast.success('Hesap başarıyla aktif edildi');
+        setOpen(false);
+        resetForm();
+        onAccountAdded();
+      }
+    } catch (error: any) {
+      console.error('Error verifying code:', error);
+      
+      // Check if 2FA is required
+      if (error.errorMessage === 'SESSION_PASSWORD_NEEDED' || error.message?.includes('2FA')) {
+        setStep('2fa');
+        toast.info('Bu hesapta 2FA aktif. Lütfen şifrenizi girin.');
+      } else {
+        toast.error('Kod doğrulanamadı: ' + (error.message || 'Bilinmeyen hata'));
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handle2faSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!password2fa) {
+      toast.error('Lütfen 2FA şifrenizi girin');
+      return;
+    }
+
+    if (!telegramClient) {
+      toast.error('Telegram bağlantısı bulunamadı. Lütfen tekrar deneyin.');
+      setStep('phone');
+      return;
+    }
+
+    setLoading(true);
+
+    try {
+      // Get password information
+      const passwordInfo = await telegramClient.invoke(new Api.account.GetPassword());
+      
+      // Compute password hash using the library's utility
+      const { computeCheck } = await import('telegram/Password');
+      const passwordHash = await computeCheck(passwordInfo, password2fa);
+
+      // Check password
+      const authResult = await telegramClient.invoke(
+        new Api.auth.CheckPassword({
+          password: passwordHash,
+        })
+      );
+
+      // Get session string
+      const sessionString = telegramClient.session.save() as unknown as string;
+      await telegramClient.disconnect();
 
       // Update account with session string and activate it
       const { error: updateError } = await supabase
@@ -186,20 +239,25 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
       resetForm();
       onAccountAdded();
     } catch (error: any) {
-      console.error('Error verifying code:', error);
-      toast.error('Kod doğrulanamadı: ' + (error.message || 'Bilinmeyen hata'));
+      console.error('Error verifying 2FA:', error);
+      toast.error('2FA doğrulanamadı: ' + (error.message || 'Bilinmeyen hata'));
     } finally {
       setLoading(false);
     }
   };
 
   const resetForm = () => {
+    if (telegramClient) {
+      telegramClient.disconnect().catch(console.error);
+    }
     setStep('phone');
     setPhoneNumber('');
     setSelectedApiId('');
     setOtp('');
+    setPassword2fa('');
     setPhoneCodeHash('');
     setAccountId('');
+    setTelegramClient(null);
   };
 
   return (
@@ -219,7 +277,9 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
           <DialogDescription>
             {step === 'phone' 
               ? 'Telefon numaranızı girin ve doğrulama kodu alın.'
-              : 'Telegram\'a gelen 5 haneli doğrulama kodunu girin.'}
+              : step === 'otp'
+              ? 'Telegram\'a gelen 5 haneli doğrulama kodunu girin.'
+              : 'Hesabınızda 2FA aktif. Lütfen şifrenizi girin.'}
           </DialogDescription>
         </DialogHeader>
         
@@ -272,7 +332,7 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
               )}
             </Button>
           </form>
-        ) : (
+        ) : step === 'otp' ? (
           <form onSubmit={handleOtpSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="otp">Doğrulama Kodu</Label>
@@ -306,6 +366,49 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
                 type="submit" 
                 className="flex-1" 
                 disabled={loading || otp.length !== 5}
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Doğrulanıyor...
+                  </>
+                ) : (
+                  'Devam'
+                )}
+              </Button>
+            </div>
+          </form>
+        ) : (
+          <form onSubmit={handle2faSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="password2fa">2FA Şifresi</Label>
+              <Input
+                id="password2fa"
+                type="password"
+                placeholder="2FA şifrenizi girin"
+                value={password2fa}
+                onChange={(e) => setPassword2fa(e.target.value)}
+                required
+              />
+              <p className="text-xs text-muted-foreground">
+                Telegram hesabınızın 2FA (iki faktörlü doğrulama) şifresini girin
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <Button 
+                type="button"
+                variant="outline"
+                className="flex-1"
+                onClick={() => setStep('otp')}
+                disabled={loading}
+              >
+                Geri
+              </Button>
+              <Button 
+                type="submit" 
+                className="flex-1" 
+                disabled={loading || !password2fa}
               >
                 {loading ? (
                   <>
