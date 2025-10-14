@@ -1,26 +1,26 @@
-import { Zap, LogOut, Plus } from 'lucide-react';
-import { Button } from './ui/button';
-import { useAuth } from '@/hooks/useAuth';
-import { toast } from 'sonner';
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from './ui/dialog';
-import { useState } from 'react';
-import { Input } from './ui/input';
-import { Label } from './ui/label';
-import { supabase } from '@/integrations/supabase/client';
+import { Zap, LogOut, Plus } from "lucide-react";
+import { Button } from "./ui/button";
+import { useAuth } from "@/hooks/useAuth";
+import { toast } from "sonner";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "./ui/dialog";
+import { useState } from "react";
+import { Input } from "./ui/input";
+import { Label } from "./ui/label";
+import { supabase } from "@/integrations/supabase/client";
 
 export const Header = () => {
   const { signOut, user } = useAuth();
   const [apiDialogOpen, setApiDialogOpen] = useState(false);
-  const [apiId, setApiId] = useState('');
-  const [apiHash, setApiHash] = useState('');
+  const [apiId, setApiId] = useState("");
+  const [apiHash, setApiHash] = useState("");
   const [loading, setLoading] = useState(false);
 
   const handleLogout = async () => {
     try {
       await signOut();
-      toast.success('Çıkış yapıldı');
+      toast.success("Çıkış yapıldı");
     } catch (error) {
-      toast.error('Çıkış sırasında bir hata oluştu');
+      toast.error("Çıkış sırasında bir hata oluştu");
     }
   };
 
@@ -29,20 +29,20 @@ export const Header = () => {
     setLoading(true);
 
     try {
-      const { error } = await supabase.from('telegram_api_credentials').insert({
+      const { error } = await supabase.from("telegram_api_credentials").insert({
         api_id: apiId,
         api_hash: apiHash,
-        created_by: user?.id
+        created_by: user?.id,
       });
 
       if (error) throw error;
 
-      toast.success('API bilgileri kaydedildi');
+      toast.success("API bilgileri kaydedildi");
       setApiDialogOpen(false);
-      setApiId('');
-      setApiHash('');
+      setApiId("");
+      setApiHash("");
     } catch (error: any) {
-      toast.error('API bilgileri kaydedilemedi: ' + error.message);
+      toast.error("API bilgileri kaydedilemedi: " + error.message);
     } finally {
       setLoading(false);
     }
@@ -57,14 +57,12 @@ export const Header = () => {
           </div>
           <div>
             <h1 className="text-xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
-              Scithe Telegram Paneli
+              Scygdo Telegram Paneli
             </h1>
-            <p className="text-xs text-muted-foreground">
-              {user?.email}
-            </p>
+            <p className="text-xs text-muted-foreground">{user?.email}</p>
           </div>
         </div>
-        
+
         <div className="flex items-center gap-2">
           <Dialog open={apiDialogOpen} onOpenChange={setApiDialogOpen}>
             <DialogTrigger asChild>
@@ -77,15 +75,16 @@ export const Header = () => {
               <DialogHeader>
                 <DialogTitle>Telegram API Bilgileri</DialogTitle>
                 <DialogDescription>
-                  Telegram hesapları eklemek için API ID ve Hash gereklidir. 
-                  <a 
-                    href="https://my.telegram.org/apps" 
-                    target="_blank" 
+                  Telegram hesapları eklemek için API ID ve Hash gereklidir.
+                  <a
+                    href="https://my.telegram.org/apps"
+                    target="_blank"
                     rel="noopener noreferrer"
                     className="text-primary hover:underline ml-1"
                   >
                     my.telegram.org/apps
-                  </a> adresinden alabilirsiniz.
+                  </a>{" "}
+                  adresinden alabilirsiniz.
                 </DialogDescription>
               </DialogHeader>
               <form onSubmit={handleSaveApiCredentials} className="space-y-4">
@@ -110,7 +109,7 @@ export const Header = () => {
                   />
                 </div>
                 <Button type="submit" className="w-full" disabled={loading}>
-                  {loading ? 'Kaydediliyor...' : 'Kaydet'}
+                  {loading ? "Kaydediliyor..." : "Kaydet"}
                 </Button>
               </form>
             </DialogContent>
