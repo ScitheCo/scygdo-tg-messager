@@ -10,6 +10,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
+import { TelegramClient } from '@mtcute/web';
 
 interface AddAccountDialogProps {
   onAccountAdded: () => void;
@@ -50,6 +51,15 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
     setLoading(true);
 
     try {
+      // Get API credentials
+      const { data: apiCred, error: apiError } = await supabase
+        .from('telegram_api_credentials')
+        .select('*')
+        .eq('id', selectedApiId)
+        .single();
+
+      if (apiError || !apiCred) throw new Error('API bilgileri alınamadı');
+
       // First, insert the account as inactive
       const { data: accountData, error: insertError } = await supabase
         .from('telegram_accounts')
@@ -65,25 +75,29 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
       if (insertError) throw insertError;
       setAccountId(accountData.id);
 
-      // Send authentication code via edge function
-      const { data: authData, error: authError } = await supabase.functions.invoke('telegram-auth', {
-        body: { 
-          action: 'send_code',
-          phone_number: phoneNumber,
-          api_credential_id: selectedApiId
-        }
+      // Initialize Telegram client in browser
+      const tg = new TelegramClient({
+        apiId: Number(apiCred.api_id),
+        apiHash: apiCred.api_hash,
+        storage: `tg-session-${phoneNumber}`
       });
 
-      if (authError) throw authError;
+      // Send code via Telegram API
+      const codeInfo = await tg.sendCode({ phone: phoneNumber });
       
-      setPhoneCodeHash(authData.phone_code_hash);
-      setStep('otp');
-      toast.success('Doğrulama kodu gönderildi');
+      if ('phoneCodeHash' in codeInfo) {
+        setPhoneCodeHash(codeInfo.phoneCodeHash);
+        setStep('otp');
+        toast.success('Doğrulama kodu Telegram\'a gönderildi');
+      } else {
+        throw new Error('Kod gönderilemedi');
+      }
     } catch (error: any) {
+      console.error('Error sending code:', error);
       if (error.code === '23505') {
         toast.error('Bu telefon numarası zaten kayıtlı');
       } else {
-        toast.error('Kod gönderilemedi: ' + error.message);
+        toast.error('Kod gönderilemedi: ' + (error.message || 'Bilinmeyen hata'));
       }
     } finally {
       setLoading(false);
@@ -101,36 +115,49 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
     setLoading(true);
 
     try {
-      // Verify OTP and get session string
-      const { data: sessionData, error: sessionError } = await supabase.functions.invoke('telegram-auth', {
+      // Get API credentials again
+      const { data: apiCred, error: apiError } = await supabase
+        .from('telegram_api_credentials')
+        .select('*')
+        .eq('id', selectedApiId)
+        .single();
+
+      if (apiError || !apiCred) throw new Error('API bilgileri alınamadı');
+
+      // Initialize client with same storage
+      const tg = new TelegramClient({
+        apiId: Number(apiCred.api_id),
+        apiHash: apiCred.api_hash,
+        storage: `tg-session-${phoneNumber}`
+      });
+
+      // Sign in with code
+      await tg.signIn({
+        phone: phoneNumber,
+        phoneCodeHash: phoneCodeHash,
+        phoneCode: otp
+      });
+
+      // Export session string
+      const sessionString = await tg.exportSession();
+
+      // Send session to backend to save
+      const { error: saveError } = await supabase.functions.invoke('telegram-auth', {
         body: {
-          action: 'verify_code',
-          phone_number: phoneNumber,
-          phone_code_hash: phoneCodeHash,
-          code: otp,
-          api_credential_id: selectedApiId
+          account_id: accountId,
+          session_string: JSON.stringify(sessionString)
         }
       });
 
-      if (sessionError) throw sessionError;
-
-      // Update account with session string and activate
-      const { error: updateError } = await supabase
-        .from('telegram_accounts')
-        .update({
-          session_string: sessionData.session_string,
-          is_active: true
-        })
-        .eq('id', accountId);
-
-      if (updateError) throw updateError;
+      if (saveError) throw saveError;
 
       toast.success('Hesap başarıyla aktif edildi');
       setOpen(false);
       resetForm();
       onAccountAdded();
     } catch (error: any) {
-      toast.error('Kod doğrulanamadı: ' + error.message);
+      console.error('Error verifying code:', error);
+      toast.error('Kod doğrulanamadı: ' + (error.message || 'Bilinmeyen hata'));
     } finally {
       setLoading(false);
     }
