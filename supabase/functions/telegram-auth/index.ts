@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts"
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { TelegramClient } from 'jsr:@mtcute/deno'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -26,25 +27,27 @@ serve(async (req) => {
       .eq('id', api_credential_id)
       .single()
 
-    if (apiError) throw apiError
+    if (apiError || !apiCred) throw (apiError ?? new Error('API credentials not found'))
+
+    const apiId = Number(apiCred.api_id)
+    const apiHash = String(apiCred.api_hash)
+
+    if (Number.isNaN(apiId) || !apiHash) throw new Error('Invalid API credentials')
 
     if (action === 'send_code') {
-      // Here you would integrate with Telegram's API to send the code
-      // For now, we'll simulate the response
-      // In production, use a library like gramjs or telegram-client
-      
-      // This is a placeholder - you need to implement actual Telegram API integration
-      // using libraries that work with Deno
-      
-      console.log('Sending code to:', phone_number)
-      console.log('Using API ID:', apiCred.api_id)
-      
-      // Simulated phone_code_hash (in production, this comes from Telegram API)
-      const mockPhoneCodeHash = `mock_hash_${Date.now()}`
-      
+      const tg = new TelegramClient({ apiId, apiHash, storage: `acc-${phone_number}` })
+
+      // Request code from Telegram
+      // requestCode returns an object containing phoneCodeHash
+      // Reference: https://mtcute.dev
+      // deno-lint-ignore no-explicit-any
+      const codeInfo: any = await (tg as any).requestCode({ phone: phone_number })
+
+      console.log('Sent code to:', phone_number)
+
       return new Response(
         JSON.stringify({ 
-          phone_code_hash: mockPhoneCodeHash,
+          phone_code_hash: codeInfo?.phoneCodeHash,
           message: 'Kod Telegram üzerinden gönderildi' 
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
@@ -52,18 +55,23 @@ serve(async (req) => {
     }
 
     if (action === 'verify_code') {
-      // Here you would verify the code with Telegram's API
-      // For now, we'll simulate the response
-      
-      console.log('Verifying code:', code)
-      console.log('Phone code hash:', phone_code_hash)
-      
-      // Simulated session string (in production, this comes from Telegram API)
-      const mockSessionString = `1BVtsOJYBuzD_session_${Date.now()}`
-      
+      const tg = new TelegramClient({ apiId, apiHash, storage: `acc-${phone_number}` })
+
+      // deno-lint-ignore no-explicit-any
+      const me: any = await (tg as any).signIn({
+        phone: phone_number,
+        phoneCodeHash: phone_code_hash,
+        phoneCode: code
+      })
+
+      // Try exporting session
+      // deno-lint-ignore no-explicit-any
+      const session: any = await (tg as any).exportSession?.()
+
       return new Response(
         JSON.stringify({ 
-          session_string: mockSessionString,
+          session_string: session ?? null,
+          user: me ?? null,
           message: 'Doğrulama başarılı' 
         }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
