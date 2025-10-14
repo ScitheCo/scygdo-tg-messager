@@ -100,8 +100,11 @@ export const MessagePanel = () => {
             }
 
             try {
+              // Get the entity first to ensure proper ID format
+              const entity = await client.getEntity(group.telegram_id.toString());
+              
               // Send the actual message
-              await client.sendMessage(group.telegram_id, { message });
+              await client.sendMessage(entity, { message });
               
               // Log success
               await supabase.from('message_logs').insert({
