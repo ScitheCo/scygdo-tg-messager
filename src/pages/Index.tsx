@@ -1,20 +1,10 @@
-import { useEffect } from 'react';
-import { useStore } from '@/store/useStore';
 import { Header } from '@/components/Header';
 import { AccountList } from '@/components/AccountList';
 import { GroupList } from '@/components/GroupList';
 import { MessagePanel } from '@/components/MessagePanel';
 import { LogsPanel } from '@/components/LogsPanel';
-import accountsData from '@/data/accounts.json';
-import groupsData from '@/data/groups.json';
 
 const Index = () => {
-  const { setAccounts, setGroups } = useStore();
-
-  useEffect(() => {
-    setAccounts(accountsData);
-    setGroups(groupsData);
-  }, [setAccounts, setGroups]);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
