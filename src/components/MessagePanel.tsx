@@ -5,6 +5,8 @@ import { Textarea } from '@/components/ui/textarea';
 import { toast } from 'sonner';
 import { Send, Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
+import { TelegramClient } from 'telegram';
+import { StringSession } from 'telegram/sessions/StringSession';
 
 export const MessagePanel = () => {
   const [message, setMessage] = useState('');
@@ -46,34 +48,85 @@ export const MessagePanel = () => {
 
       // Send messages for each account-group combination
       for (const accountId of selectedAccountIds) {
-        for (const group of groups) {
-          // Check if this group belongs to this account
-          if (group.account_id !== accountId.toString()) continue;
+        // Get account credentials
+        const { data: accountData } = await supabase
+          .from('telegram_accounts')
+          .select('session_string, api_credential_id')
+          .eq('id', accountId)
+          .single();
 
-          // Log the message attempt
-          const logStatus = 'pending';
-          const { error: logError } = await supabase.from('message_logs').insert({
-            account_id: accountId,
-            group_id: group.id,
-            message_text: message,
-            status: logStatus
-          });
+        if (!accountData) {
+          toast.error('Hesap bilgileri bulunamadı');
+          continue;
+        }
 
-          if (logError) {
-            console.error('Log error:', logError);
+        const { data: apiData } = await supabase
+          .from('telegram_api_credentials')
+          .select('api_id, api_hash')
+          .eq('id', accountData.api_credential_id)
+          .single();
+
+        if (!apiData) {
+          toast.error('API bilgileri bulunamadı');
+          continue;
+        }
+
+        // Initialize Telegram client
+        const stringSession = new StringSession(accountData.session_string);
+        const client = new TelegramClient(
+          stringSession,
+          parseInt(apiData.api_id),
+          apiData.api_hash,
+          { connectionRetries: 5 }
+        );
+
+        try {
+          await client.connect();
+
+          for (const group of groups) {
+            // Check if this group belongs to this account
+            if (group.account_id !== accountId.toString()) continue;
+
+            // Log the message attempt
+            const { error: logError } = await supabase.from('message_logs').insert({
+              account_id: accountId,
+              group_id: group.id,
+              message_text: message,
+              status: 'pending'
+            });
+
+            if (logError) {
+              console.error('Log error:', logError);
+            }
+
+            try {
+              // Send the actual message
+              await client.sendMessage(group.telegram_id, { message });
+              
+              // Log success
+              await supabase.from('message_logs').insert({
+                account_id: accountId,
+                group_id: group.id,
+                message_text: message,
+                status: 'success'
+              });
+            } catch (error: any) {
+              // Log error
+              await supabase.from('message_logs').insert({
+                account_id: accountId,
+                group_id: group.id,
+                message_text: message,
+                status: 'error',
+                error_message: error.message
+              });
+              console.error('Message send error:', error);
+            }
           }
 
-          // In a real implementation, call telegram-send-message edge function here
-          // For now, we'll just simulate success
-          await new Promise(resolve => setTimeout(resolve, 500));
-          
-          // Update log with success
-          await supabase.from('message_logs').insert({
-            account_id: accountId,
-            group_id: group.id,
-            message_text: message,
-            status: 'success'
-          });
+          await client.disconnect();
+        } catch (error: any) {
+          console.error('Client error:', error);
+          toast.error(`Hesap bağlantı hatası: ${error.message}`);
         }
       }
 
