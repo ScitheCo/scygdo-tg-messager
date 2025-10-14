@@ -183,7 +183,7 @@ export const MessagePanel = () => {
           placeholder="Mesajınızı buraya yazın..."
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          className="flex-1 min-h-[200px] resize-none bg-muted/30 border-border focus:border-primary transition-colors"
+          className="h-[200px] resize-none bg-muted/30 border-border focus:border-primary transition-colors"
           disabled={isSending}
         />
 
