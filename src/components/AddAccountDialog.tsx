@@ -10,6 +10,9 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useQuery } from '@tanstack/react-query';
 import { useAuth } from '@/hooks/useAuth';
+import { TelegramClient } from 'telegram';
+import { StringSession } from 'telegram/sessions';
+import { Api } from 'telegram/tl';
 
 interface AddAccountDialogProps {
   onAccountAdded: () => void;
@@ -74,20 +77,40 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
       if (insertError) throw insertError;
       setAccountId(accountData.id);
 
-      // Send code via edge function
-      const { data, error } = await supabase.functions.invoke('telegram-auth', {
-        body: {
-          action: 'send_code',
-          phone_number: phoneNumber,
-          api_id: apiCred.api_id,
-          api_hash: apiCred.api_hash
+      // Create Telegram client and send code directly from frontend
+      const client = new TelegramClient(
+        new StringSession(''),
+        parseInt(apiCred.api_id),
+        apiCred.api_hash,
+        {
+          connectionRetries: 5,
         }
-      });
+      );
 
-      if (error) throw error;
-      if (!data.success) throw new Error(data.error || 'Kod gönderilemedi');
+      await client.connect();
 
-      setPhoneCodeHash(data.phone_code_hash);
+      const result = await client.invoke(
+        new Api.auth.SendCode({
+          phoneNumber: phoneNumber,
+          apiId: parseInt(apiCred.api_id),
+          apiHash: apiCred.api_hash,
+          settings: new Api.CodeSettings({
+            allowFlashcall: false,
+            currentNumber: false,
+            allowAppHash: false,
+          }),
+        })
+      );
+
+      await client.disconnect();
+
+      // Access phoneCodeHash from the result
+      const phoneCodeHashValue = 'phoneCodeHash' in result ? (result as any).phoneCodeHash : '';
+      if (!phoneCodeHashValue) {
+        throw new Error('phoneCodeHash alınamadı');
+      }
+      
+      setPhoneCodeHash(phoneCodeHashValue);
       setStep('otp');
       toast.success('Doğrulama kodu Telegram\'a gönderildi');
     } catch (error: any) {
@@ -122,21 +145,41 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
 
       if (apiError || !apiCred) throw new Error('API bilgileri alınamadı');
 
-      // Verify code via edge function
-      const { data, error } = await supabase.functions.invoke('telegram-auth', {
-        body: {
-          action: 'verify_code',
-          account_id: accountId,
-          phone_number: phoneNumber,
-          api_id: apiCred.api_id,
-          api_hash: apiCred.api_hash,
-          phone_code_hash: phoneCodeHash,
-          code: otp
+      // Create Telegram client and verify code directly from frontend
+      const client = new TelegramClient(
+        new StringSession(''),
+        parseInt(apiCred.api_id),
+        apiCred.api_hash,
+        {
+          connectionRetries: 5,
         }
-      });
+      );
 
-      if (error) throw error;
-      if (!data.success) throw new Error(data.error || 'Kod doğrulanamadı');
+      await client.connect();
+
+      const authResult = await client.invoke(
+        new Api.auth.SignIn({
+          phoneNumber: phoneNumber,
+          phoneCodeHash: phoneCodeHash,
+          phoneCode: otp,
+        })
+      );
+
+      // Get session string
+      const sessionString = client.session.save() as unknown as string;
+
+      await client.disconnect();
+
+      // Update account with session string and activate it
+      const { error: updateError } = await supabase
+        .from('telegram_accounts')
+        .update({
+          session_string: sessionString,
+          is_active: true
+        })
+        .eq('id', accountId);
+
+      if (updateError) throw updateError;
 
       toast.success('Hesap başarıyla aktif edildi');
       setOpen(false);
