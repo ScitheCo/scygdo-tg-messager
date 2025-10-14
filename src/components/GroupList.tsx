@@ -12,7 +12,6 @@ export const GroupList = () => {
     selectedAccountIds,
     selectedGroupIds,
     toggleGroup,
-    selectAllGroups,
     deselectAllGroups,
   } = useStore();
 
@@ -35,6 +34,11 @@ export const GroupList = () => {
 
   const allSelected = groups.length > 0 &&
     groups.every((grp) => selectedGroupIds.includes(grp.id.toString()));
+  
+  const handleSelectAll = () => {
+    const allGroupIds = groups.map(g => g.id.toString());
+    useStore.setState({ selectedGroupIds: allGroupIds });
+  };
 
   if (selectedAccountIds.length === 0) {
     return (
@@ -64,7 +68,7 @@ export const GroupList = () => {
             <Button
               variant="ghost"
               size="sm"
-              onClick={allSelected ? deselectAllGroups : selectAllGroups}
+              onClick={allSelected ? deselectAllGroups : handleSelectAll}
               className="h-8 text-xs hover:bg-muted"
             >
               {allSelected ? (

@@ -12,7 +12,7 @@ interface StoreState {
   deselectAllGroups: () => void;
 }
 
-export const useStore = create<StoreState>((set) => ({
+export const useStore = create<StoreState>((set, get) => ({
   selectedAccountIds: [],
   selectedGroupIds: [],
 
@@ -23,7 +23,7 @@ export const useStore = create<StoreState>((set) => ({
         : [...state.selectedAccountIds, id],
     })),
 
-  selectAllAccounts: () => set({ selectedAccountIds: [] }), // Will be updated with actual IDs
+  selectAllAccounts: () => set({ selectedAccountIds: [] }), // Will be updated with actual IDs from component
 
   deselectAllAccounts: () => set({ selectedAccountIds: [] }),
 
@@ -34,7 +34,7 @@ export const useStore = create<StoreState>((set) => ({
         : [...state.selectedGroupIds, id],
     })),
 
-  selectAllGroups: () => set({ selectedGroupIds: [] }), // Will be updated with actual IDs
+  selectAllGroups: () => set({ selectedGroupIds: [] }), // Will be updated with actual IDs from component
 
   deselectAllGroups: () => set({ selectedGroupIds: [] }),
 }));

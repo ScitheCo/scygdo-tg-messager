@@ -12,7 +12,6 @@ export const AccountList = () => {
   const {
     selectedAccountIds,
     toggleAccount,
-    selectAllAccounts,
     deselectAllAccounts,
   } = useStore();
 
@@ -32,6 +31,11 @@ export const AccountList = () => {
   const activeAccounts = accounts.filter(acc => acc.is_active);
   const allSelected = activeAccounts.length > 0 && 
     activeAccounts.every((acc) => selectedAccountIds.includes(acc.id.toString()));
+  
+  const handleSelectAll = () => {
+    const allActiveIds = activeAccounts.map(acc => acc.id.toString());
+    useStore.setState({ selectedAccountIds: allActiveIds });
+  };
 
   const handleDeleteAccount = async (accountId: string) => {
     try {
@@ -50,8 +54,26 @@ export const AccountList = () => {
   };
 
   const handleSyncGroups = async (accountId: string) => {
-    toast.info('Grup senkronizasyonu için telegram-sync-groups edge fonksiyonu kullanılacak');
-    // Edge function will be called here
+    const toastId = toast.loading('Gruplar senkronize ediliyor...');
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('telegram-sync-groups', {
+        body: { account_id: accountId }
+      });
+
+      if (error) throw error;
+
+      if (data.session_expired) {
+        toast.error('Oturum süresi dolmuş. Hesabı tekrar ekleyin.', { id: toastId });
+        refetch();
+        return;
+      }
+
+      toast.success(data.message || 'Gruplar başarıyla senkronize edildi', { id: toastId });
+    } catch (error: any) {
+      console.error('Sync error:', error);
+      toast.error('Senkronizasyon hatası: ' + (error.message || 'Bilinmeyen hata'), { id: toastId });
+    }
   };
 
   return (
@@ -72,7 +94,7 @@ export const AccountList = () => {
             <Button
               variant="ghost"
               size="sm"
-              onClick={allSelected ? deselectAllAccounts : selectAllAccounts}
+              onClick={allSelected ? deselectAllAccounts : handleSelectAll}
               className="h-8 text-xs hover:bg-muted"
             >
               {allSelected ? (
