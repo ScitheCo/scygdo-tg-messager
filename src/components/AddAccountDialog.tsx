@@ -8,12 +8,14 @@ import { Plus } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { useQuery } from '@tanstack/react-query';
+import { useAuth } from '@/hooks/useAuth';
 
 interface AddAccountDialogProps {
   onAccountAdded: () => void;
 }
 
 export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
+  const { user } = useAuth();
   const [open, setOpen] = useState(false);
   const [phoneNumber, setPhoneNumber] = useState('');
   const [selectedApiId, setSelectedApiId] = useState('');
@@ -46,7 +48,8 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
       const { error } = await supabase.from('telegram_accounts').insert({
         phone_number: phoneNumber,
         api_credential_id: selectedApiId,
-        is_active: false
+        is_active: false,
+        created_by: user?.id
       });
 
       if (error) throw error;
