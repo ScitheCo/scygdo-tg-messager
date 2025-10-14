@@ -1,7 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
 import { TelegramClient } from "npm:telegram@2.26.22";
-import { StringSession } from "npm:telegram@2.26.22/sessions";
+import { StringSession } from "npm:telegram@2.26.22/sessions/StringSession.js";
 import { Api } from "npm:telegram@2.26.22/tl";
 
 const corsHeaders = {
