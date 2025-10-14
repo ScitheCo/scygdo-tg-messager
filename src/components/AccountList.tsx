@@ -4,9 +4,11 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Users, CheckSquare, Square, Trash2, RefreshCw } from 'lucide-react';
 import { AddAccountDialog } from './AddAccountDialog';
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { TelegramClient } from 'telegram';
+import { StringSession } from 'telegram/sessions';
 
 export const AccountList = () => {
   const {
@@ -14,6 +16,8 @@ export const AccountList = () => {
     toggleAccount,
     deselectAllAccounts,
   } = useStore();
+
+  const queryClient = useQueryClient();
 
   const { data: accounts = [], refetch } = useQuery({
     queryKey: ['telegram-accounts'],
@@ -57,19 +61,80 @@ export const AccountList = () => {
     const toastId = toast.loading('Gruplar senkronize ediliyor...');
     
     try {
-      const { data, error } = await supabase.functions.invoke('telegram-sync-groups', {
-        body: { account_id: accountId }
-      });
+      // 1) Hesabı getir
+      const { data: account, error: accErr } = await supabase
+        .from('telegram_accounts')
+        .select('id, session_string, is_active, api_credential_id')
+        .eq('id', accountId)
+        .maybeSingle();
 
-      if (error) throw error;
-
-      if (data.session_expired) {
-        toast.error('Oturum süresi dolmuş. Hesabı tekrar ekleyin.', { id: toastId });
-        refetch();
-        return;
+      if (accErr) throw accErr;
+      if (!account || !account.session_string || !account.is_active) {
+        throw new Error('Hesap aktif değil veya oturum bilgisi eksik');
       }
 
-      toast.success(data.message || 'Gruplar başarıyla senkronize edildi', { id: toastId });
+      // 2) API bilgilerini getir
+      const { data: cred, error: credErr } = await supabase
+        .from('telegram_api_credentials')
+        .select('api_id, api_hash')
+        .eq('id', account.api_credential_id)
+        .maybeSingle();
+
+      if (credErr) throw credErr;
+      if (!cred) throw new Error('API kimlik bilgileri bulunamadı');
+
+      // 3) Telegram client ile bağlan
+      const client = new TelegramClient(
+        new StringSession(account.session_string as string),
+        parseInt(cred.api_id as any),
+        cred.api_hash as string,
+        { connectionRetries: 5 }
+      );
+
+      await client.connect();
+
+      // Session geçerli mi?
+      try {
+        await client.getMe();
+      } catch (e) {
+        await client.disconnect();
+        throw new Error('Oturum geçersiz. Hesabı tekrar ekleyin.');
+      }
+
+      // 4) Dialogları al ve grupları/kanalları çıkar
+      const dialogs = await client.getDialogs({ limit: 200 });
+      const groupsToInsert: any[] = [];
+
+      for (const dialog of dialogs) {
+        const entity: any = dialog.entity;
+        if (!entity) continue;
+        if (entity.className === 'Channel' || entity.className === 'Chat') {
+          const isChannel = entity.className === 'Channel' && entity.broadcast === true;
+          groupsToInsert.push({
+            account_id: accountId,
+            telegram_id: entity.id?.toString?.() ?? String(entity.id),
+            title: entity.title || 'Untitled',
+            username: entity.username || null,
+            is_channel: isChannel,
+          });
+        }
+      }
+
+      await client.disconnect();
+
+      // 5) Eski kayıtları sil ve yenilerini ekle
+      await supabase.from('telegram_groups').delete().eq('account_id', accountId);
+
+      if (groupsToInsert.length > 0) {
+        const { error: insertErr } = await supabase
+          .from('telegram_groups')
+          .insert(groupsToInsert);
+        if (insertErr) throw insertErr;
+      }
+
+      await queryClient.invalidateQueries({ queryKey: ['telegram-groups'] });
+
+      toast.success(`${groupsToInsert.length} grup/kanal senkronize edildi`, { id: toastId });
     } catch (error: any) {
       console.error('Sync error:', error);
       toast.error('Senkronizasyon hatası: ' + (error.message || 'Bilinmeyen hata'), { id: toastId });
