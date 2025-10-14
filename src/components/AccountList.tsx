@@ -142,13 +142,13 @@ export const AccountList = () => {
   };
 
   return (
-    <div className="bg-card rounded-xl p-4 border border-border">
-      <div className="flex items-center justify-between mb-4">
+    <div className="bg-card rounded-xl p-4 md:p-4 border border-border">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2">
           <Users className="w-5 h-5 text-primary" />
-          <h2 className="text-lg font-semibold text-foreground">Hesaplar</h2>
+          <h2 className="text-base md:text-lg font-semibold text-foreground">Hesaplar</h2>
           {selectedAccountIds.length > 0 && (
-            <Badge variant="secondary" className="bg-primary/20 text-primary">
+            <Badge variant="secondary" className="bg-primary/20 text-primary text-xs">
               {selectedAccountIds.length} seçili
             </Badge>
           )}
@@ -180,15 +180,15 @@ export const AccountList = () => {
 
       <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
         {accounts.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
+          <div className="text-center py-8 text-muted-foreground text-sm">
             <p>Henüz hesap eklenmemiş</p>
-            <p className="text-sm mt-1">Başlamak için "Hesap Ekle" butonuna tıklayın</p>
+            <p className="text-xs mt-1">Başlamak için "Hesap Ekle" butonuna tıklayın</p>
           </div>
         ) : (
           accounts.map((account) => (
             <div
               key={account.id}
-            className={`flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 ${
+            className={`flex items-center gap-3 p-2.5 md:p-3 rounded-lg border transition-all duration-200 ${
               selectedAccountIds.includes(account.id.toString())
                 ? 'bg-primary/10 border-primary'
                 : 'bg-muted/30 border-border hover:bg-muted/50'
@@ -202,7 +202,7 @@ export const AccountList = () => {
               />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <p className="font-medium text-foreground truncate">{account.phone_number}</p>
+                  <p className="text-sm md:text-base font-medium text-foreground truncate">{account.phone_number}</p>
                   {!account.is_active ? (
                     <Badge variant="destructive" className="text-xs">
                       Pasif
@@ -223,20 +223,20 @@ export const AccountList = () => {
                     variant="ghost"
                     size="sm"
                     onClick={() => handleSyncGroups(account.id)}
-                    className="h-8 w-8 p-0"
+                    className="h-7 w-7 md:h-8 md:w-8 p-0"
                     title="Grupları senkronize et"
                   >
-                    <RefreshCw className="h-4 w-4" />
+                    <RefreshCw className="h-3 w-3 md:h-4 md:w-4" />
                   </Button>
                 )}
                 <Button
                   variant="ghost"
                   size="sm"
                   onClick={() => handleDeleteAccount(account.id)}
-                  className="h-8 w-8 p-0 hover:bg-destructive/20 hover:text-destructive"
+                  className="h-7 w-7 md:h-8 md:w-8 p-0 hover:bg-destructive/20 hover:text-destructive"
                   title="Hesabı sil"
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <Trash2 className="h-3 w-3 md:h-4 md:w-4" />
                 </Button>
               </div>
             </div>

@@ -52,13 +52,13 @@ export const GroupList = () => {
   }
 
   return (
-    <div className="bg-card rounded-xl p-4 border border-border">
-      <div className="flex items-center justify-between mb-4">
+    <div className="bg-card rounded-xl p-4 md:p-4 border border-border">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2">
           <MessageSquare className="w-5 h-5 text-secondary" />
-          <h2 className="text-lg font-semibold text-foreground">Gruplar ve Kanallar</h2>
+          <h2 className="text-base md:text-lg font-semibold text-foreground">Gruplar ve Kanallar</h2>
           {selectedGroupIds.length > 0 && (
-            <Badge variant="secondary" className="bg-secondary/20 text-secondary">
+            <Badge variant="secondary" className="bg-secondary/20 text-secondary text-xs">
               {selectedGroupIds.length} seçili
             </Badge>
           )}
@@ -89,15 +89,15 @@ export const GroupList = () => {
 
       <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
         {groups.length === 0 ? (
-          <div className="text-center py-8 text-muted-foreground">
+          <div className="text-center py-8 text-muted-foreground text-sm">
             <p>Henüz grup bulunamadı</p>
-            <p className="text-sm mt-1">Seçili hesaplar için grupları senkronize edin</p>
+            <p className="text-xs mt-1">Seçili hesaplar için grupları senkronize edin</p>
           </div>
         ) : (
           groups.map((group) => (
             <div
               key={group.id}
-            className={`flex items-center gap-3 p-3 rounded-lg border transition-all duration-200 ${
+            className={`flex items-center gap-3 p-2.5 md:p-3 rounded-lg border transition-all duration-200 ${
               selectedGroupIds.includes(group.id.toString())
                 ? 'bg-secondary/10 border-secondary'
                 : 'bg-muted/30 border-border hover:bg-muted/50'
@@ -110,7 +110,7 @@ export const GroupList = () => {
             />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <p className="font-medium text-foreground truncate">{group.title}</p>
+                  <p className="text-sm md:text-base font-medium text-foreground truncate">{group.title}</p>
                   {group.is_channel && (
                     <Badge variant="outline" className="text-xs">
                       Kanal

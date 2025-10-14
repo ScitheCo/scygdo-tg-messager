@@ -56,13 +56,13 @@ export const LogsPanel = () => {
   };
 
   return (
-    <div className="bg-card rounded-xl p-4 border border-border h-full flex flex-col">
-      <div className="flex items-center justify-between mb-4">
+    <div className="bg-card rounded-xl p-4 md:p-4 border border-border flex flex-col">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
         <div className="flex items-center gap-2">
           <ClipboardList className="w-5 h-5 text-accent" />
-          <h2 className="text-lg font-semibold text-foreground">Gönderim Logları</h2>
+          <h2 className="text-base md:text-lg font-semibold text-foreground">Gönderim Logları</h2>
           {logs.length > 0 && (
-            <Badge variant="outline">{logs.length} kayıt</Badge>
+            <Badge variant="outline" className="text-xs">{logs.length} kayıt</Badge>
           )}
         </div>
         {logs.length > 0 && (
@@ -78,27 +78,27 @@ export const LogsPanel = () => {
         )}
       </div>
 
-      <ScrollArea className="flex-1 pr-4">
+      <ScrollArea className="flex-1 pr-2 md:pr-4">
         <div className="space-y-2">
           {logs.length === 0 ? (
-            <div className="text-center py-8 text-muted-foreground">
+            <div className="text-center py-8 text-muted-foreground text-sm">
               <p>Henüz log kaydı yok</p>
-              <p className="text-sm mt-1">Mesaj gönderdiğinizde burada görünecektir</p>
+              <p className="text-xs mt-1">Mesaj gönderdiğinizde burada görünecektir</p>
             </div>
           ) : (
             logs.map((log: any) => (
               <div
                 key={log.id}
-                className="p-3 rounded-lg bg-muted/30 border border-border hover:bg-muted/50 transition-colors"
+                className="p-2.5 md:p-3 rounded-lg bg-muted/30 border border-border hover:bg-muted/50 transition-colors"
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="flex-1 min-w-0 space-y-1">
                     <div className="flex items-center gap-2">
-                      <p className="text-sm font-medium text-foreground truncate">
+                      <p className="text-xs md:text-sm font-medium text-foreground truncate">
                         {log.telegram_accounts?.phone_number || 'Bilinmeyen hesap'}
                       </p>
-                      <span className="text-muted-foreground">→</span>
-                      <p className="text-sm font-medium text-foreground truncate">
+                      <span className="text-muted-foreground text-xs">→</span>
+                      <p className="text-xs md:text-sm font-medium text-foreground truncate">
                         {log.telegram_groups?.title || 'Bilinmeyen grup'}
                       </p>
                     </div>

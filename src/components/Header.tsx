@@ -49,29 +49,30 @@ export const Header = () => {
   };
 
   return (
-    <header className="bg-card border-b border-border px-6 py-4 sticky top-0 z-50 backdrop-blur-sm bg-card/95">
+    <header className="bg-card border-b border-border px-4 md:px-6 py-3 md:py-4 sticky top-0 z-50 backdrop-blur-sm bg-card/95">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center justify-center w-10 h-10 bg-gradient-to-br from-primary to-secondary rounded-lg">
-            <Zap className="w-6 h-6 text-white" />
+        <div className="flex items-center gap-2 md:gap-3">
+          <div className="flex items-center justify-center w-8 h-8 md:w-10 md:h-10 bg-gradient-to-br from-primary to-secondary rounded-lg">
+            <Zap className="w-4 h-4 md:w-6 md:h-6 text-white" />
           </div>
           <div>
-            <h1 className="text-xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
-              Scygdo Telegram Paneli
+            <h1 className="text-base md:text-xl font-bold bg-gradient-to-r from-primary to-secondary bg-clip-text text-transparent">
+              Scygdo Telegram
             </h1>
-            <p className="text-xs text-muted-foreground">{user?.email}</p>
+            <p className="text-xs text-muted-foreground hidden sm:block">{user?.email}</p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
           <Dialog open={apiDialogOpen} onOpenChange={setApiDialogOpen}>
             <DialogTrigger asChild>
-              <Button variant="outline" size="sm" className="gap-2">
-                <Plus className="h-4 w-4" />
-                API Ayarları
+              <Button variant="outline" size="sm" className="gap-1 md:gap-2 text-xs md:text-sm">
+                <Plus className="h-3 w-3 md:h-4 md:w-4" />
+                <span className="hidden sm:inline">API Ayarları</span>
+                <span className="sm:hidden">API</span>
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="max-w-[90vw] sm:max-w-md">
               <DialogHeader>
                 <DialogTitle>Telegram API Bilgileri</DialogTitle>
                 <DialogDescription>
@@ -115,9 +116,9 @@ export const Header = () => {
             </DialogContent>
           </Dialog>
 
-          <Button variant="outline" size="sm" onClick={handleLogout} className="gap-2">
-            <LogOut className="h-4 w-4" />
-            Çıkış
+          <Button variant="outline" size="sm" onClick={handleLogout} className="gap-1 md:gap-2 text-xs md:text-sm">
+            <LogOut className="h-3 w-3 md:h-4 md:w-4" />
+            <span className="hidden sm:inline">Çıkış</span>
           </Button>
         </div>
       </div>

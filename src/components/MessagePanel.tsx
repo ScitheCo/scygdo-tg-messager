@@ -172,22 +172,22 @@ export const MessagePanel = () => {
   };
 
   return (
-    <div className="bg-card rounded-xl p-6 border border-border flex flex-col">
+    <div className="bg-card rounded-xl p-4 md:p-6 border border-border">
       <div className="flex items-center gap-2 mb-4">
         <Send className="w-5 h-5 text-primary" />
         <h2 className="text-lg font-semibold text-foreground">Mesaj Gönder</h2>
       </div>
 
-      <div className="flex flex-col gap-4">
+      <div className="space-y-4">
         <Textarea
           placeholder="Mesajınızı buraya yazın..."
           value={message}
           onChange={(e) => setMessage(e.target.value)}
-          className="h-[200px] resize-none bg-muted/30 border-border focus:border-primary transition-colors"
+          className="h-32 md:h-40 resize-none bg-muted/30 border-border focus:border-primary transition-colors"
           disabled={isSending}
         />
 
-        <div className="flex items-center justify-between">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="text-sm text-muted-foreground">
             <span className="font-medium text-primary">{selectedAccountIds.length}</span> hesap,{' '}
             <span className="font-medium text-secondary">{selectedGroupIds.length}</span> grup seçili
@@ -200,7 +200,7 @@ export const MessagePanel = () => {
               selectedAccountIds.length === 0 ||
               selectedGroupIds.length === 0
             }
-            className="bg-primary hover:bg-primary/90 text-primary-foreground min-w-[120px]"
+            className="bg-primary hover:bg-primary/90 text-primary-foreground w-full sm:w-auto min-w-[120px]"
           >
             {isSending ? (
               <>
