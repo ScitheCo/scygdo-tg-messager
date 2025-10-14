@@ -1,0 +1,37 @@
+[
+  {
+    "id": 1,
+    "name": "Ana Hesap",
+    "username": "@mainaccount",
+    "phone": "+90 555 111 2233",
+    "active": true
+  },
+  {
+    "id": 2,
+    "name": "İş Hesabı",
+    "username": "@businessacc",
+    "phone": "+90 555 444 5566",
+    "active": true
+  },
+  {
+    "id": 3,
+    "name": "Promo Hesap",
+    "username": "@promoacc",
+    "phone": "+90 555 777 8899",
+    "active": true
+  },
+  {
+    "id": 4,
+    "name": "Test Hesabı",
+    "username": "@testacc",
+    "phone": "+90 555 000 1122",
+    "active": false
+  },
+  {
+    "id": 5,
+    "name": "Yedek Hesap",
+    "username": "@backupacc",
+    "phone": "+90 555 333 4455",
+    "active": true
+  }
+]

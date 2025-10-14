@@ -1,12 +1,40 @@
-// Update this page (the content is just a fallback if you fail to update the page)
+import { useEffect } from 'react';
+import { useStore } from '@/store/useStore';
+import { Header } from '@/components/Header';
+import { AccountList } from '@/components/AccountList';
+import { GroupList } from '@/components/GroupList';
+import { MessagePanel } from '@/components/MessagePanel';
+import { LogsPanel } from '@/components/LogsPanel';
+import accountsData from '@/data/accounts.json';
+import groupsData from '@/data/groups.json';
 
 const Index = () => {
+  const { setAccounts, setGroups } = useStore();
+
+  useEffect(() => {
+    setAccounts(accountsData);
+    setGroups(groupsData);
+  }, [setAccounts, setGroups]);
+
   return (
-    <div className="flex min-h-screen items-center justify-center bg-background">
-      <div className="text-center">
-        <h1 className="mb-4 text-4xl font-bold">Welcome to Your Blank App</h1>
-        <p className="text-xl text-muted-foreground">Start building your amazing project here!</p>
-      </div>
+    <div className="min-h-screen bg-background flex flex-col">
+      <Header />
+      
+      <main className="flex-1 container mx-auto p-6">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
+          {/* Left Sidebar - Accounts & Groups */}
+          <div className="lg:col-span-1 space-y-6">
+            <AccountList />
+            <GroupList />
+          </div>
+
+          {/* Right Panel - Message & Logs */}
+          <div className="lg:col-span-2 grid grid-rows-2 gap-6">
+            <MessagePanel />
+            <LogsPanel />
+          </div>
+        </div>
+      </main>
     </div>
   );
 };

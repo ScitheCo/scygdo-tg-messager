@@ -1,0 +1,66 @@
+[
+  {
+    "id": 101,
+    "name": "Kripto Yatırımcılar TR",
+    "chatId": "-1001234567890",
+    "accessHash": "12345678901234567890",
+    "memberCount": 15234,
+    "accountIds": [1, 2, 3]
+  },
+  {
+    "id": 102,
+    "name": "Freelance Türkiye",
+    "chatId": "-1009876543210",
+    "accessHash": "09876543210987654321",
+    "memberCount": 8456,
+    "accountIds": [1, 2, 5]
+  },
+  {
+    "id": 103,
+    "name": "Yazılım Geliştiriciler",
+    "chatId": "-1001122334455",
+    "accessHash": "11223344556677889900",
+    "memberCount": 12890,
+    "accountIds": [2, 3, 4]
+  },
+  {
+    "id": 104,
+    "name": "E-ticaret Satıcılar",
+    "chatId": "-1005544332211",
+    "accessHash": "55443322110099887766",
+    "memberCount": 6732,
+    "accountIds": [1, 3, 5]
+  },
+  {
+    "id": 105,
+    "name": "Dijital Pazarlama",
+    "chatId": "-1002233445566",
+    "accessHash": "22334455667788990011",
+    "memberCount": 9421,
+    "accountIds": [2, 4, 5]
+  },
+  {
+    "id": 106,
+    "name": "NFT ve Web3 Türkiye",
+    "chatId": "-1007788990011",
+    "accessHash": "77889900112233445566",
+    "memberCount": 4567,
+    "accountIds": [1, 2]
+  },
+  {
+    "id": 107,
+    "name": "Startup Girişimciler",
+    "chatId": "-1003344556677",
+    "accessHash": "33445566778899001122",
+    "memberCount": 7890,
+    "accountIds": [3, 5]
+  },
+  {
+    "id": 108,
+    "name": "Hisse Senedi Yatırım",
+    "chatId": "-1006677889900",
+    "accessHash": "66778899001122334455",
+    "memberCount": 11234,
+    "accountIds": [1, 4]
+  }
+]
