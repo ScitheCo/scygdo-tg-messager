@@ -61,6 +61,7 @@
     "tailwindcss-animate": "^1.0.7",
     "telegram": "^2.26.22",
     "vaul": "^0.9.9",
+    "vite-plugin-node-polyfills": "^0.24.0",
     "zod": "^3.25.76",
     "zustand": "^5.0.8"
   },
