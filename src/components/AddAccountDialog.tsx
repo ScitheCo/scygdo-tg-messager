@@ -155,14 +155,23 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
       if (authResult.className === 'auth.Authorization') {
         // Success - no 2FA required
         const sessionString = telegramClient.session.save() as unknown as string;
+        
+        // Get user info to save name
+        const me = await telegramClient.getMe();
+        const firstName = (me as any).firstName || '';
+        const lastName = (me as any).lastName || '';
+        const username = (me as any).username || '';
+        const displayName = username ? `@${username}` : `${firstName} ${lastName}`.trim();
+        
         await telegramClient.disconnect();
 
-        // Update account with session string and activate it
+        // Update account with session string, name and activate it
         const { error: updateError } = await supabase
           .from('telegram_accounts')
           .update({
             session_string: sessionString,
-            is_active: true
+            is_active: true,
+            name: displayName
           })
           .eq('id', accountId);
 
@@ -219,16 +228,24 @@ export const AddAccountDialog = ({ onAccountAdded }: AddAccountDialogProps) => {
         })
       );
 
+      // Get user info to save name
+      const me = await telegramClient.getMe();
+      const firstName = (me as any).firstName || '';
+      const lastName = (me as any).lastName || '';
+      const username = (me as any).username || '';
+      const displayName = username ? `@${username}` : `${firstName} ${lastName}`.trim();
+      
       // Get session string
       const sessionString = telegramClient.session.save() as unknown as string;
       await telegramClient.disconnect();
 
-      // Update account with session string and activate it
+      // Update account with session string, name and activate it
       const { error: updateError } = await supabase
         .from('telegram_accounts')
         .update({
           session_string: sessionString,
-          is_active: true
+          is_active: true,
+          name: displayName
         })
         .eq('id', accountId);
 

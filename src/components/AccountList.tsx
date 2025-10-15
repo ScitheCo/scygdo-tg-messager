@@ -201,8 +201,10 @@ export const AccountList = () => {
                 className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
               />
               <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2">
-                  <p className="text-sm md:text-base font-medium text-foreground truncate">{account.phone_number}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="text-sm md:text-base font-medium text-foreground truncate">
+                    {account.name || account.phone_number}
+                  </p>
                   {!account.is_active ? (
                     <Badge variant="destructive" className="text-xs">
                       Pasif
@@ -214,7 +216,7 @@ export const AccountList = () => {
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
-                  {account.created_at ? new Date(account.created_at).toLocaleDateString('tr-TR') : ''}
+                  {account.phone_number}
                 </p>
               </div>
               <div className="flex gap-1">
