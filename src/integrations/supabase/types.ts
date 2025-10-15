@@ -14,6 +14,105 @@ export type Database = {
   }
   public: {
     Tables: {
+      account_daily_limits: {
+        Row: {
+          account_id: string
+          date: string
+          id: string
+          last_used_at: string | null
+          members_added_today: number | null
+        }
+        Insert: {
+          account_id: string
+          date?: string
+          id?: string
+          last_used_at?: string | null
+          members_added_today?: number | null
+        }
+        Update: {
+          account_id?: string
+          date?: string
+          id?: string
+          last_used_at?: string | null
+          members_added_today?: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "account_daily_limits_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "telegram_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      member_scraping_logs: {
+        Row: {
+          account_id: string | null
+          created_at: string | null
+          created_by: string | null
+          details: Json | null
+          error_message: string | null
+          id: string
+          members_added: number | null
+          source_group_id: string | null
+          source_group_title: string | null
+          status: string
+          target_group_id: string | null
+          target_group_title: string | null
+        }
+        Insert: {
+          account_id?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          details?: Json | null
+          error_message?: string | null
+          id?: string
+          members_added?: number | null
+          source_group_id?: string | null
+          source_group_title?: string | null
+          status: string
+          target_group_id?: string | null
+          target_group_title?: string | null
+        }
+        Update: {
+          account_id?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          details?: Json | null
+          error_message?: string | null
+          id?: string
+          members_added?: number | null
+          source_group_id?: string | null
+          source_group_title?: string | null
+          status?: string
+          target_group_id?: string | null
+          target_group_title?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "member_scraping_logs_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "telegram_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "member_scraping_logs_source_group_id_fkey"
+            columns: ["source_group_id"]
+            isOneToOne: false
+            referencedRelation: "telegram_groups"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "member_scraping_logs_target_group_id_fkey"
+            columns: ["target_group_id"]
+            isOneToOne: false
+            referencedRelation: "telegram_groups"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       message_logs: {
         Row: {
           account_id: string | null
@@ -186,18 +285,46 @@ export type Database = {
           },
         ]
       }
+      user_roles: {
+        Row: {
+          created_at: string | null
+          id: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Insert: {
+          created_at?: string | null
+          id?: string
+          role: Database["public"]["Enums"]["app_role"]
+          user_id: string
+        }
+        Update: {
+          created_at?: string | null
+          id?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
+      has_role: {
+        Args: {
+          _role: Database["public"]["Enums"]["app_role"]
+          _user_id: string
+        }
+        Returns: boolean
+      }
       user_owns_account: {
         Args: { _account_id: string }
         Returns: boolean
       }
     }
     Enums: {
-      [_ in never]: never
+      app_role: "Standart" | "Super Admin"
     }
     CompositeTypes: {
       [_ in never]: never
@@ -324,6 +451,8 @@ export type CompositeTypes<
 
 export const Constants = {
   public: {
-    Enums: {},
+    Enums: {
+      app_role: ["Standart", "Super Admin"],
+    },
   },
 } as const

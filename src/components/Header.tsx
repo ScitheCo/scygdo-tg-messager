@@ -1,4 +1,4 @@
-import { Zap, LogOut, Plus } from "lucide-react";
+import { Zap, LogOut, Plus, Users } from "lucide-react";
 import { Button } from "./ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
@@ -7,9 +7,11 @@ import { useState } from "react";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { supabase } from "@/integrations/supabase/client";
+import { useNavigate } from "react-router-dom";
 
 export const Header = () => {
-  const { signOut, user } = useAuth();
+  const { signOut, user, isSuperAdmin } = useAuth();
+  const navigate = useNavigate();
   const [apiDialogOpen, setApiDialogOpen] = useState(false);
   const [apiId, setApiId] = useState("");
   const [apiHash, setApiHash] = useState("");
@@ -64,6 +66,19 @@ export const Header = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {isSuperAdmin && (
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => navigate('/member-scraping')} 
+              className="gap-1 md:gap-2 text-xs md:text-sm"
+            >
+              <Users className="h-3 w-3 md:h-4 md:w-4" />
+              <span className="hidden sm:inline">Üye Çekimi</span>
+              <span className="sm:hidden">Üye</span>
+            </Button>
+          )}
+          
           <Dialog open={apiDialogOpen} onOpenChange={setApiDialogOpen}>
             <DialogTrigger asChild>
               <Button variant="outline" size="sm" className="gap-1 md:gap-2 text-xs md:text-sm">
