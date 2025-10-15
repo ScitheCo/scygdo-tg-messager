@@ -191,7 +191,10 @@ export type Database = {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      user_owns_account: {
+        Args: { _account_id: string }
+        Returns: boolean
+      }
     }
     Enums: {
       [_ in never]: never

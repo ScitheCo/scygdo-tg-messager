@@ -93,9 +93,14 @@ export const AccountList = () => {
 
       await client.connect();
 
-      // Session geçerli mi?
+      // Session geçerli mi? Aynı zamanda kullanıcı bilgisini al
+      let displayName = '';
       try {
-        await client.getMe();
+        const me = await client.getMe();
+        const firstName = (me as any).firstName || '';
+        const lastName = (me as any).lastName || '';
+        const username = (me as any).username || '';
+        displayName = username ? `@${username}` : `${firstName} ${lastName}`.trim();
       } catch (e) {
         await client.disconnect();
         throw new Error('Oturum geçersiz. Hesabı tekrar ekleyin.');
@@ -122,7 +127,15 @@ export const AccountList = () => {
 
       await client.disconnect();
 
-      // 5) Eski kayıtları sil ve yenilerini ekle
+      // 5) Hesap ismini güncelle (eğer yoksa)
+      if (displayName) {
+        await supabase
+          .from('telegram_accounts')
+          .update({ name: displayName })
+          .eq('id', accountId);
+      }
+
+      // 6) Eski kayıtları sil ve yenilerini ekle
       await supabase.from('telegram_groups').delete().eq('account_id', accountId);
 
       if (groupsToInsert.length > 0) {
