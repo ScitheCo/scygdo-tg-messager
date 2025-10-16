@@ -15,8 +15,12 @@ import { Loader2, Play, Trash2 } from 'lucide-react';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram/tl';
+import { Input } from '@/components/ui/input';
 
 const DAILY_LIMIT_PER_ACCOUNT = 50; // Spam limiti - günlük hesap başına üye ekleme limiti
+const DEFAULT_INVITE_DELAY = 3; // Davet başına bekleme süresi (saniye)
+const DEFAULT_BATCH_DELAY = 40; // 5 üye sonrası bekleme süresi (saniye)
+const DEFAULT_FLOOD_WAIT_DELAY = 5; // FLOOD_WAIT sonrası bekleme (dakika)
 
 export default function MemberScraping() {
   const { user, isSuperAdmin } = useAuth();
@@ -24,6 +28,9 @@ export default function MemberScraping() {
   const [sourceGroupId, setSourceGroupId] = useState('');
   const [targetGroupId, setTargetGroupId] = useState('');
   const [isScraperRunning, setIsScraperRunning] = useState(false);
+  const [inviteDelay, setInviteDelay] = useState(DEFAULT_INVITE_DELAY);
+  const [batchDelay, setBatchDelay] = useState(DEFAULT_BATCH_DELAY);
+  const [floodWaitDelay, setFloodWaitDelay] = useState(DEFAULT_FLOOD_WAIT_DELAY);
 
   // Fetch accounts based on filter
   const { data: accounts, refetch: refetchAccounts } = useQuery({
@@ -183,13 +190,19 @@ export default function MemberScraping() {
               addedCount++;
               toast.success(`Üye eklendi (${addedCount}/${remainingLimit})`);
 
-              // Wait to avoid flood limits
-              await new Promise(resolve => setTimeout(resolve, 2000));
+              // Wait based on settings
+              if (addedCount % 5 === 0) {
+                toast.info(`5 üye eklendi, ${batchDelay} saniye bekleniyor...`);
+                await new Promise(resolve => setTimeout(resolve, batchDelay * 1000));
+              } else {
+                await new Promise(resolve => setTimeout(resolve, inviteDelay * 1000));
+              }
             } catch (error: any) {
               console.error('Error adding member:', error);
               
               if (error.message?.includes('FLOOD')) {
-                toast.error('Flood hatası! Sonraki hesaba geçiliyor...');
+                toast.error(`Flood hatası! ${floodWaitDelay} dakika bekleniyor...`);
+                await new Promise(resolve => setTimeout(resolve, floodWaitDelay * 60 * 1000));
                 break;
               }
             }
@@ -349,7 +362,45 @@ export default function MemberScraping() {
                   </Select>
                 </div>
 
-                <Button 
+                <div className="space-y-4 pt-2 border-t">
+                  <div className="space-y-2">
+                    <Label htmlFor="invite-delay">Davet Başına Bekleme (saniye)</Label>
+                    <Input
+                      id="invite-delay"
+                      type="number"
+                      min="1"
+                      max="30"
+                      value={inviteDelay}
+                      onChange={(e) => setInviteDelay(Number(e.target.value))}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="batch-delay">5 Üye Sonrası Bekleme (saniye)</Label>
+                    <Input
+                      id="batch-delay"
+                      type="number"
+                      min="10"
+                      max="120"
+                      value={batchDelay}
+                      onChange={(e) => setBatchDelay(Number(e.target.value))}
+                    />
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label htmlFor="flood-delay">FLOOD Sonrası Bekleme (dakika)</Label>
+                    <Input
+                      id="flood-delay"
+                      type="number"
+                      min="1"
+                      max="60"
+                      value={floodWaitDelay}
+                      onChange={(e) => setFloodWaitDelay(Number(e.target.value))}
+                    />
+                  </div>
+                </div>
+
+                <Button
                   onClick={handleStartScraping} 
                   disabled={isScraperRunning || !sourceGroupId || !targetGroupId}
                   className="w-full"

@@ -2,15 +2,20 @@ import { useState } from 'react';
 import { useStore } from '@/store/useStore';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
 import { toast } from 'sonner';
 import { Send, Loader2 } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions/StringSession';
 
+const DEFAULT_MESSAGE_DELAY = 2; // Mesaj başına bekleme süresi (saniye)
+
 export const MessagePanel = () => {
   const [message, setMessage] = useState('');
   const [isSending, setIsSending] = useState(false);
+  const [messageDelay, setMessageDelay] = useState(DEFAULT_MESSAGE_DELAY);
   const {
     selectedAccountIds,
     selectedGroupIds,
@@ -139,6 +144,9 @@ export const MessagePanel = () => {
                 message_text: message,
                 status: 'success'
               });
+
+              // Wait between messages
+              await new Promise(resolve => setTimeout(resolve, messageDelay * 1000));
             } catch (error: any) {
               // Log error
               await supabase.from('message_logs').insert({
@@ -186,6 +194,20 @@ export const MessagePanel = () => {
           className="h-32 md:h-40 resize-none bg-muted/30 border-border focus:border-primary transition-colors"
           disabled={isSending}
         />
+
+        <div className="space-y-2">
+          <Label htmlFor="message-delay">Mesajlar Arası Bekleme Süresi (saniye)</Label>
+          <Input
+            id="message-delay"
+            type="number"
+            min="1"
+            max="30"
+            value={messageDelay}
+            onChange={(e) => setMessageDelay(Number(e.target.value))}
+            disabled={isSending}
+            className="w-full sm:w-48"
+          />
+        </div>
 
         <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
           <div className="text-sm text-muted-foreground">
