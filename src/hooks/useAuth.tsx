@@ -7,6 +7,7 @@ export const useAuth = () => {
   const [session, setSession] = useState<Session | null>(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState<string | null>(null);
+  const [userRoles, setUserRoles] = useState<string[]>([]);
 
   useEffect(() => {
     // Set up auth state listener
@@ -23,6 +24,7 @@ export const useAuth = () => {
           }, 0);
         } else {
           setUserRole(null);
+          setUserRoles([]);
         }
       }
     );
@@ -43,32 +45,37 @@ export const useAuth = () => {
 
   const fetchUserRole = async (userId: string) => {
     try {
-      console.log('Fetching role for user:', userId);
+      console.log('Fetching roles for user:', userId);
       const { data, error } = await supabase
         .from('user_roles')
         .select('role')
-        .eq('user_id', userId)
-        .maybeSingle();
+        .eq('user_id', userId);
       
-      console.log('Role data:', data, 'Error:', error);
+      console.log('Roles data:', data, 'Error:', error);
       
-      if (!error && data) {
-        setUserRole(data.role);
-        console.log('User role set to:', data.role);
+      if (!error && Array.isArray(data)) {
+        const roles = data.map((d: any) => String(d.role));
+        setUserRoles(roles);
+        setUserRole(roles[0] ?? null);
+        console.log('User roles set to:', roles);
       } else {
-        console.log('No role found or error occurred');
+        console.log('No roles found or error occurred');
       }
     } catch (error) {
-      console.error('Error fetching user role:', error);
+      console.error('Error fetching user roles:', error);
     }
   };
 
   const signOut = async () => {
     await supabase.auth.signOut();
     setUserRole(null);
+    setUserRoles([]);
   };
 
-  const isSuperAdmin = userRole === 'Super Admin';
+  const isSuperAdmin = userRoles.some((r) => {
+    const n = r.toLowerCase().replace(/[\s-]+/g, '_');
+    return n.includes('super') && n.includes('admin');
+  });
 
-  return { user, session, loading, signOut, userRole, isSuperAdmin };
+  return { user, session, loading, signOut, userRole, userRoles, isSuperAdmin };
 };
