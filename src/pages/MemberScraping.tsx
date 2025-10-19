@@ -210,40 +210,83 @@ export default function MemberScraping() {
     try {
       const today = new Date().toISOString().split('T')[0];
       let totalAdded = 0;
+      
+      // Create main progress log
+      const { data: mainLog } = await supabase
+        .from('member_scraping_logs')
+        .insert({
+          created_by: user?.id,
+          source_group_id: sourceGroupInfo.id,
+          target_group_id: targetGroupInfo.id,
+          source_group_title: sourceGroupInfo.title,
+          target_group_title: targetGroupInfo.title,
+          members_added: 0,
+          status: 'in_progress',
+          details: {
+            phase: 'initializing',
+            total_accounts: accounts.length,
+          },
+        })
+        .select()
+        .single();
 
-      for (let accountIndex = 0; accountIndex < accounts.length; accountIndex++) {
-        // Check if cancelled
-        if (statusRef.current === 'cancelled') {
-          await logToDatabase('cancelled', 'İşlem kullanıcı tarafından iptal edildi', 0);
-          break;
-        }
+      // STEP 1: Get all members from source and target groups
+      const accountMembersData: Array<{
+        account: any;
+        client: TelegramClient | null;
+        sourceMembers: any[];
+        targetMemberIds: Set<string>;
+        memberIndex: number;
+        todayAdded: number;
+        isFloodWaiting: boolean;
+        floodWaitUntil: number;
+      }> = [];
 
-        const account = accounts[accountIndex];
-        
-        setCurrentProgress(prev => ({
-          ...prev,
-          currentAccount: account.name || account.phone_number,
-          currentAccountIndex: accountIndex + 1,
-        }));
-
-        // Check daily limit
-        const { data: limitData } = await supabase
-          .from('account_daily_limits')
-          .select('members_added_today')
-          .eq('account_id', account.id)
-          .eq('date', today)
-          .maybeSingle();
-
-        if (limitData && limitData.members_added_today >= dailyLimit) {
-          await logToDatabase('skipped', `${account.name || account.phone_number}: Günlük limit aşıldı`, 0, account.id);
-          continue;
-        }
-
-        let client: TelegramClient | null = null;
+      // Fetch members for each account
+      for (const account of accounts) {
+        if (statusRef.current === 'cancelled') break;
 
         try {
-          // Create progress log
-          const { data: progressLog } = await supabase
+          const client = new TelegramClient(
+            new StringSession(account.session_string || ''),
+            parseInt(account.telegram_api_credentials.api_id),
+            account.telegram_api_credentials.api_hash,
+            { connectionRetries: 5 }
+          );
+
+          await client.connect();
+
+          // Get source group members
+          const sourceEntity = await client.getEntity(sourceGroupInput);
+          const sourceParticipants = await client.getParticipants(sourceEntity, { limit: 500 });
+
+          // Get target group members (to check if already exists)
+          const targetEntity = await client.getEntity(targetGroupInput);
+          const targetParticipants = await client.getParticipants(targetEntity, { limit: 1000 });
+          const targetMemberIds = new Set(targetParticipants.map(p => String(p.id)));
+
+          // Check today's limit
+          const { data: limitData } = await supabase
+            .from('account_daily_limits')
+            .select('members_added_today')
+            .eq('account_id', account.id)
+            .eq('date', today)
+            .maybeSingle();
+
+          const todayAdded = limitData?.members_added_today || 0;
+
+          accountMembersData.push({
+            account,
+            client,
+            sourceMembers: sourceParticipants,
+            targetMemberIds,
+            memberIndex: 0,
+            todayAdded,
+            isFloodWaiting: false,
+            floodWaitUntil: 0,
+          });
+
+          await supabase
             .from('member_scraping_logs')
             .insert({
               created_by: user?.id,
@@ -255,181 +298,258 @@ export default function MemberScraping() {
               members_added: 0,
               status: 'in_progress',
               details: {
-                progress: { current: 0, target: dailyLimit },
+                phase: 'members_fetched',
                 account_name: account.name || account.phone_number,
+                source_count: sourceParticipants.length,
+                target_count: targetParticipants.length,
               },
-            })
-            .select()
-            .single();
-
-          setCurrentProgress(prev => ({ ...prev, currentLogId: progressLog?.id || null }));
-
-          client = new TelegramClient(
-            new StringSession(account.session_string || ''),
-            parseInt(account.telegram_api_credentials.api_id),
-            account.telegram_api_credentials.api_hash,
-            { connectionRetries: 5 }
-          );
-
-          await client.connect();
-
-          const sourceEntity = await client.getEntity(sourceGroupInput);
-          const participants = await client.getParticipants(sourceEntity, { limit: 200 });
-          const targetEntity = await client.getEntity(targetGroupInput);
-
-          let addedCount = 0;
-          const currentLimit = limitData?.members_added_today || 0;
-          const remainingLimit = dailyLimit - currentLimit;
-
-          for (let i = 0; i < participants.length; i++) {
-            // Check status controls
-            while (statusRef.current === 'paused') {
-              await new Promise(resolve => setTimeout(resolve, 1000));
-            }
-
-            if ((statusRef.current as ScrapingStatus) === 'cancelled') {
-              break;
-            }
-
-            if (addedCount >= remainingLimit) {
-              break;
-            }
-
-            const participant = participants[i];
-
-            try {
-              // Skip bots, deleted, restricted
-              if ((participant as any).bot || (participant as any).deleted || (participant as any).restricted) {
-                continue;
-              }
-
-              // Check activity status
-              const status = (participant as any).status;
-              if (status) {
-                const statusClass = status.className;
-                if (statusClass === 'UserStatusLastWeek' || 
-                    statusClass === 'UserStatusLastMonth' || 
-                    statusClass === 'UserStatusOffline') {
-                  continue;
-                }
-              }
-
-              // Add member
-              await client.invoke(
-                new Api.channels.InviteToChannel({
-                  channel: targetEntity,
-                  users: [await client.getInputEntity(participant.id)],
-                })
-              );
-
-              addedCount++;
-              totalAdded++;
-
-              // Update progress in DB
-              if (progressLog?.id) {
-                await supabase
-                  .from('member_scraping_logs')
-                  .update({
-                    members_added: addedCount,
-                    details: {
-                      progress: { current: addedCount, target: remainingLimit },
-                      account_name: account.name || account.phone_number,
-                    },
-                  })
-                  .eq('id', progressLog.id);
-              }
-
-              setCurrentProgress(prev => ({ ...prev, membersAdded: totalAdded }));
-
-              // Smart delays with randomness
-              if (addedCount % 5 === 0) {
-                const randomBatchDelay = Math.random() * 5 + batchDelay;
-                await new Promise(resolve => setTimeout(resolve, randomBatchDelay * 1000));
-              } else {
-                const randomInviteDelay = Math.random() * 2 + inviteDelay;
-                await new Promise(resolve => setTimeout(resolve, randomInviteDelay * 1000));
-              }
-            } catch (error: any) {
-              console.error('Error adding member:', error);
-
-              // Skip privacy errors silently
-              if (error.message?.includes('USER_PRIVACY_RESTRICTED') || 
-                  error.message?.includes('USER_NOT_MUTUAL_CONTACT') ||
-                  error.message?.includes('USER_CHANNELS_TOO_MUCH')) {
-                continue;
-              }
-
-              // Smart FLOOD handling
-              if (error.message?.includes('FLOOD')) {
-                const waitSeconds = error.seconds || 300;
-                
-                // Log flood wait
-                await supabase
-                  .from('member_scraping_logs')
-                  .insert({
-                    created_by: user?.id,
-                    account_id: account.id,
-                    source_group_id: sourceGroupInfo.id,
-                    target_group_id: targetGroupInfo.id,
-                    source_group_title: sourceGroupInfo.title,
-                    target_group_title: targetGroupInfo.title,
-                    members_added: addedCount,
-                    status: 'flood_wait',
-                    error_message: `Flood hatası! ${waitSeconds} saniye beklenecek`,
-                    details: {
-                      wait_seconds: waitSeconds,
-                      account_name: account.name || account.phone_number,
-                    },
-                  });
-
-                // Skip this account and continue with next
-                break;
-              }
-            }
-          }
-
-          await client.disconnect();
-          client = null;
-
-          // Update daily limit
-          await supabase.from('account_daily_limits').upsert({
-            account_id: account.id,
-            date: today,
-            members_added_today: currentLimit + addedCount,
-            last_used_at: new Date().toISOString(),
-          });
-
-          // Update final log
-          if (progressLog?.id) {
-            await supabase
-              .from('member_scraping_logs')
-              .update({
-                status: (statusRef.current as ScrapingStatus) === 'cancelled' ? 'cancelled' : 'success',
-                members_added: addedCount,
-              })
-              .eq('id', progressLog.id);
-          }
+            });
         } catch (error: any) {
-          console.error('Account error:', error);
-          
-          if (client) {
-            try {
-              await client.disconnect();
-            } catch (e) {
-              console.error('Error disconnecting:', e);
-            }
-          }
-
-          await logToDatabase('error', error.message || 'Bilinmeyen hata', 0, account.id);
+          console.error(`Error fetching members for ${account.name}:`, error);
+          await logToDatabase('error', `${account.name}: Üye listesi alınamadı - ${error.message}`, 0, account.id);
         }
       }
 
+      if (accountMembersData.length === 0) {
+        throw new Error('Hiçbir hesaptan üye listesi alınamadı');
+      }
+
+      // STEP 2: Round-robin member addition
+      let currentAccountIndex = 0;
+      let consecutiveSkips = 0;
+      const maxConsecutiveSkips = accountMembersData.length * 3;
+
+      while (totalAdded < dailyLimit * accounts.length && consecutiveSkips < maxConsecutiveSkips) {
+        // Check pause/cancel
+        while (statusRef.current === 'paused') {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        if (statusRef.current === 'cancelled') {
+          await logToDatabase('cancelled', 'İşlem kullanıcı tarafından iptal edildi', totalAdded);
+          break;
+        }
+
+        const accountData = accountMembersData[currentAccountIndex];
+        const { account, client, sourceMembers, targetMemberIds, memberIndex, todayAdded, isFloodWaiting, floodWaitUntil } = accountData;
+
+        // Update progress UI
+        setCurrentProgress({
+          currentAccount: account.name || account.phone_number,
+          currentAccountIndex: currentAccountIndex + 1,
+          totalAccounts: accounts.length,
+          membersAdded: totalAdded,
+          totalTarget: dailyLimit * accounts.length,
+          currentLogId: mainLog?.id || null,
+        });
+
+        // Skip if account reached daily limit
+        if (todayAdded >= dailyLimit) {
+          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+          consecutiveSkips++;
+          continue;
+        }
+
+        // Skip if account is in flood wait
+        if (isFloodWaiting && Date.now() < floodWaitUntil) {
+          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+          consecutiveSkips++;
+          continue;
+        } else if (isFloodWaiting && Date.now() >= floodWaitUntil) {
+          accountData.isFloodWaiting = false;
+        }
+
+        // Skip if no more members to process
+        if (memberIndex >= sourceMembers.length) {
+          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+          consecutiveSkips++;
+          continue;
+        }
+
+        // Get next member
+        const member = sourceMembers[memberIndex];
+        accountData.memberIndex++;
+
+        // Filter members
+        if ((member as any).bot || (member as any).deleted || (member as any).restricted) {
+          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+          continue;
+        }
+
+        // Skip UserStatusEmpty
+        const status = (member as any).status;
+        if (status?.className === 'UserStatusEmpty') {
+          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+          continue;
+        }
+
+        // Skip if already in target group
+        if (targetMemberIds.has(String(member.id))) {
+          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+          continue;
+        }
+
+        // Try to add member
+        if (client) {
+          try {
+            const targetEntity = await client.getEntity(targetGroupInput);
+            await client.invoke(
+              new Api.channels.InviteToChannel({
+                channel: targetEntity,
+                users: [await client.getInputEntity(member.id)],
+              })
+            );
+
+            // Success!
+            totalAdded++;
+            accountData.todayAdded++;
+            consecutiveSkips = 0;
+
+            // Update progress
+            setCurrentProgress(prev => ({ ...prev, membersAdded: totalAdded }));
+
+            // Update daily limit
+            await supabase.from('account_daily_limits').upsert({
+              account_id: account.id,
+              date: today,
+              members_added_today: accountData.todayAdded,
+              last_used_at: new Date().toISOString(),
+            });
+
+            // Log success
+            await supabase
+              .from('member_scraping_logs')
+              .insert({
+                created_by: user?.id,
+                account_id: account.id,
+                source_group_id: sourceGroupInfo.id,
+                target_group_id: targetGroupInfo.id,
+                source_group_title: sourceGroupInfo.title,
+                target_group_title: targetGroupInfo.title,
+                members_added: 1,
+                status: 'success',
+                details: {
+                  account_name: account.name || account.phone_number,
+                  member_username: (member as any).username || 'N/A',
+                  round_robin_index: currentAccountIndex,
+                  total_progress: `${totalAdded}/${dailyLimit * accounts.length}`,
+                },
+              });
+
+            // Update main log
+            if (mainLog?.id) {
+              await supabase
+                .from('member_scraping_logs')
+                .update({
+                  members_added: totalAdded,
+                  details: {
+                    phase: 'adding_members',
+                    current_account: account.name || account.phone_number,
+                    progress: {
+                      current: totalAdded,
+                      target: dailyLimit * accounts.length,
+                      percentage: Math.round((totalAdded / (dailyLimit * accounts.length)) * 100),
+                    },
+                  },
+                })
+                .eq('id', mainLog.id);
+            }
+
+            // Smart delays
+            if (accountData.todayAdded % 5 === 0) {
+              const randomBatchDelay = Math.random() * 5 + batchDelay;
+              await new Promise(resolve => setTimeout(resolve, randomBatchDelay * 1000));
+            } else {
+              const randomInviteDelay = Math.random() * 2 + inviteDelay;
+              await new Promise(resolve => setTimeout(resolve, randomInviteDelay * 1000));
+            }
+          } catch (error: any) {
+            console.error('Error adding member:', error);
+
+            // Privacy errors - skip silently
+            if (error.message?.includes('USER_PRIVACY_RESTRICTED') || 
+                error.message?.includes('USER_NOT_MUTUAL_CONTACT') ||
+                error.message?.includes('USER_CHANNELS_TOO_MUCH') ||
+                error.message?.includes('USER_ALREADY_PARTICIPANT')) {
+              // Skip to next account
+              currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+              continue;
+            }
+
+            // Flood handling
+            if (error.message?.includes('FLOOD')) {
+              const waitSeconds = error.seconds || 300;
+              accountData.isFloodWaiting = true;
+              accountData.floodWaitUntil = Date.now() + (waitSeconds * 1000);
+              
+              await supabase
+                .from('member_scraping_logs')
+                .insert({
+                  created_by: user?.id,
+                  account_id: account.id,
+                  source_group_id: sourceGroupInfo.id,
+                  target_group_id: targetGroupInfo.id,
+                  source_group_title: sourceGroupInfo.title,
+                  target_group_title: targetGroupInfo.title,
+                  members_added: 0,
+                  status: 'flood_wait',
+                  error_message: `Flood hatası! ${waitSeconds} saniye beklenecek`,
+                  details: {
+                    wait_seconds: waitSeconds,
+                    account_name: account.name || account.phone_number,
+                    will_resume_at: new Date(accountData.floodWaitUntil).toISOString(),
+                  },
+                });
+              
+              // Continue with next account
+              currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+              continue;
+            }
+
+            // Other errors
+            await logToDatabase('error', `${account.name}: ${error.message}`, 0, account.id);
+          }
+        }
+
+        // Move to next account (round-robin)
+        currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+      }
+
+      // STEP 3: Cleanup - disconnect all clients
+      for (const accountData of accountMembersData) {
+        if (accountData.client) {
+          try {
+            await accountData.client.disconnect();
+          } catch (e) {
+            console.error('Error disconnecting:', e);
+          }
+        }
+      }
+
+      // Update final main log
+      if (mainLog?.id) {
+        await supabase
+          .from('member_scraping_logs')
+          .update({
+            status: statusRef.current === 'cancelled' ? 'cancelled' : 'success',
+            members_added: totalAdded,
+            details: {
+              phase: 'completed',
+              total_added: totalAdded,
+              target: dailyLimit * accounts.length,
+              completion_percentage: Math.round((totalAdded / (dailyLimit * accounts.length)) * 100),
+            },
+          })
+          .eq('id', mainLog.id);
+      }
+
       if (statusRef.current !== 'cancelled') {
-        toast.success(`Üye çekme işlemi tamamlandı. Toplam ${totalAdded} üye eklendi.`);
+        toast.success(`✅ İşlem tamamlandı! Toplam ${totalAdded} üye eklendi.`);
       }
     } catch (error: any) {
       console.error('Scraping error:', error);
       await logToDatabase('error', error.message || 'Bilinmeyen hata', 0);
+      toast.error('Hata: ' + error.message);
     } finally {
       setScrapingStatus('idle');
       setCurrentProgress({
