@@ -1,4 +1,4 @@
-import { Zap, LogOut, Plus, Users } from "lucide-react";
+import { Zap, LogOut, Plus, Users, Send } from "lucide-react";
 import { Button } from "./ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
@@ -7,15 +7,18 @@ import { useState } from "react";
 import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { supabase } from "@/integrations/supabase/client";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 
 export const Header = () => {
   const { signOut, user, isSuperAdmin } = useAuth();
   const navigate = useNavigate();
+  const location = useLocation();
   const [apiDialogOpen, setApiDialogOpen] = useState(false);
   const [apiId, setApiId] = useState("");
   const [apiHash, setApiHash] = useState("");
   const [loading, setLoading] = useState(false);
+
+  const isOnMemberScrapingPage = location.pathname === '/member-scraping';
 
   const handleLogout = async () => {
     try {
@@ -70,12 +73,22 @@ export const Header = () => {
             <Button 
               variant="outline" 
               size="sm" 
-              onClick={() => navigate('/member-scraping')} 
+              onClick={() => navigate(isOnMemberScrapingPage ? '/' : '/member-scraping')} 
               className="gap-1 md:gap-2 text-xs md:text-sm"
             >
-              <Users className="h-3 w-3 md:h-4 md:w-4" />
-              <span className="hidden sm:inline">Üye Çekimi</span>
-              <span className="sm:hidden">Üye</span>
+              {isOnMemberScrapingPage ? (
+                <>
+                  <Send className="h-3 w-3 md:h-4 md:w-4" />
+                  <span className="hidden sm:inline">Mesaj Gönder</span>
+                  <span className="sm:hidden">Mesaj</span>
+                </>
+              ) : (
+                <>
+                  <Users className="h-3 w-3 md:h-4 md:w-4" />
+                  <span className="hidden sm:inline">Üye Çekimi</span>
+                  <span className="sm:hidden">Üye</span>
+                </>
+              )}
             </Button>
           )}
           
