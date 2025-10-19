@@ -205,17 +205,18 @@ export const AccountList = () => {
           accounts.map((account) => (
             <div
               key={account.id}
-            className={`flex items-center gap-3 p-2.5 md:p-3 rounded-lg border transition-all duration-200 ${
-              selectedAccountIds.includes(account.id.toString())
-                ? 'bg-primary/10 border-primary'
-                : 'bg-muted/30 border-border hover:bg-muted/50'
-            } ${!account.is_active ? 'opacity-50' : ''}`}
-          >
-            <Checkbox
-              checked={selectedAccountIds.includes(account.id.toString())}
-              onCheckedChange={() => toggleAccount(account.id.toString())}
-              disabled={!account.is_active}
-                className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary"
+              onClick={() => account.is_active && toggleAccount(account.id.toString())}
+              className={`flex items-center gap-3 p-2.5 md:p-3 rounded-lg border transition-all duration-200 cursor-pointer ${
+                selectedAccountIds.includes(account.id.toString())
+                  ? 'bg-primary/10 border-primary'
+                  : 'bg-muted/30 border-border hover:bg-muted/50'
+              } ${!account.is_active ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              <Checkbox
+                checked={selectedAccountIds.includes(account.id.toString())}
+                onCheckedChange={() => toggleAccount(account.id.toString())}
+                disabled={!account.is_active}
+                className="border-border data-[state=checked]:bg-primary data-[state=checked]:border-primary pointer-events-none"
               />
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2 flex-wrap">
@@ -236,7 +237,7 @@ export const AccountList = () => {
                   {account.phone_number}
                 </p>
               </div>
-              <div className="flex gap-1">
+              <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
                 {account.is_active && (
                   <Button
                     variant="ghost"

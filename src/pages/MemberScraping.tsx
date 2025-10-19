@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Header } from '@/components/Header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -17,7 +17,7 @@ import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram/tl';
 import { Input } from '@/components/ui/input';
 
-const DAILY_LIMIT_PER_ACCOUNT = 50; // Spam limiti - günlük hesap başına üye ekleme limiti
+const DEFAULT_DAILY_LIMIT = 50; // Varsayılan günlük limit
 const DEFAULT_INVITE_DELAY = 3; // Davet başına bekleme süresi (saniye)
 const DEFAULT_BATCH_DELAY = 40; // 5 üye sonrası bekleme süresi (saniye)
 const DEFAULT_FLOOD_WAIT_DELAY = 5; // FLOOD_WAIT sonrası bekleme (dakika)
@@ -32,6 +32,7 @@ export default function MemberScraping() {
   const [isScraperRunning, setIsScraperRunning] = useState(false);
   const [isVerifyingSource, setIsVerifyingSource] = useState(false);
   const [isVerifyingTarget, setIsVerifyingTarget] = useState(false);
+  const [dailyLimit, setDailyLimit] = useState(DEFAULT_DAILY_LIMIT);
   const [inviteDelay, setInviteDelay] = useState(DEFAULT_INVITE_DELAY);
   const [batchDelay, setBatchDelay] = useState(DEFAULT_BATCH_DELAY);
   const [floodWaitDelay, setFloodWaitDelay] = useState(DEFAULT_FLOOD_WAIT_DELAY);
@@ -103,7 +104,7 @@ export default function MemberScraping() {
     }
   };
 
-  // Fetch scraping logs
+  // Fetch scraping logs with realtime updates
   const { data: logs, refetch: refetchLogs } = useQuery({
     queryKey: ['member-scraping-logs'],
     queryFn: async () => {
@@ -117,8 +118,31 @@ export default function MemberScraping() {
       return data;
     },
     enabled: !!user && isSuperAdmin,
-    refetchInterval: 3000
   });
+
+  // Realtime subscription for logs
+  useEffect(() => {
+    if (!user || !isSuperAdmin) return;
+
+    const channel = supabase
+      .channel('member-scraping-logs-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'member_scraping_logs'
+        },
+        () => {
+          refetchLogs();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [user, isSuperAdmin, refetchLogs]);
 
   const handleClearLogs = async () => {
     try {
@@ -161,7 +185,7 @@ export default function MemberScraping() {
           .eq('date', today)
           .single();
 
-        if (limitData && limitData.members_added_today >= DAILY_LIMIT_PER_ACCOUNT) {
+        if (limitData && limitData.members_added_today >= dailyLimit) {
           await supabase.from('member_scraping_logs').insert({
             created_by: user?.id,
             account_id: account.id,
@@ -171,7 +195,7 @@ export default function MemberScraping() {
             target_group_title: targetGroupInfo.title,
             members_added: 0,
             status: 'skipped',
-            error_message: `Günlük limit aşıldı (${DAILY_LIMIT_PER_ACCOUNT} üye)`,
+            error_message: `Günlük limit aşıldı (${dailyLimit} üye)`,
           });
           
           toast.warning(`${account.name || account.phone_number} hesabı günlük limitini aştı`);
@@ -199,7 +223,7 @@ export default function MemberScraping() {
           
           let addedCount = 0;
           const currentLimit = limitData?.members_added_today || 0;
-          const remainingLimit = DAILY_LIMIT_PER_ACCOUNT - currentLimit;
+          const remainingLimit = dailyLimit - currentLimit;
 
           for (const participant of participants) {
             if (addedCount >= remainingLimit) {
@@ -386,9 +410,18 @@ export default function MemberScraping() {
                 <div className="space-y-2">
                   <Label>Aktif Hesap Sayısı</Label>
                   <div className="text-2xl font-bold">{accounts?.length || 0}</div>
-                  <p className="text-xs text-muted-foreground">
-                    Günlük limit: {DAILY_LIMIT_PER_ACCOUNT} üye/hesap
-                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="daily-limit">Günlük Üye Ekleme Limiti (hesap başına)</Label>
+                  <Input
+                    id="daily-limit"
+                    type="number"
+                    min="1"
+                    max="500"
+                    value={dailyLimit}
+                    onChange={(e) => setDailyLimit(Number(e.target.value))}
+                  />
                 </div>
 
                 <div className="space-y-2">
