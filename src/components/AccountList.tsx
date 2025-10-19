@@ -275,13 +275,6 @@ export const AccountList = () => {
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   {account.phone_number}
-                  {(() => {
-                    const limitStatus = getAccountLimitStatus(account.id);
-                    if (limitStatus) {
-                      return ` • ${limitStatus.members_added_today || 0} üye eklendi`;
-                    }
-                    return '';
-                  })()}
                 </p>
               </div>
               <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
