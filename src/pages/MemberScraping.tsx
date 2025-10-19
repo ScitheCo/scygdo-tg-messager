@@ -25,9 +25,13 @@ const DEFAULT_FLOOD_WAIT_DELAY = 5; // FLOOD_WAIT sonrası bekleme (dakika)
 export default function MemberScraping() {
   const { user, isSuperAdmin } = useAuth();
   const [showAllAccounts, setShowAllAccounts] = useState(true);
-  const [sourceGroupId, setSourceGroupId] = useState('');
-  const [targetGroupId, setTargetGroupId] = useState('');
+  const [sourceGroupInput, setSourceGroupInput] = useState('');
+  const [targetGroupInput, setTargetGroupInput] = useState('');
+  const [sourceGroupInfo, setSourceGroupInfo] = useState<any>(null);
+  const [targetGroupInfo, setTargetGroupInfo] = useState<any>(null);
   const [isScraperRunning, setIsScraperRunning] = useState(false);
+  const [isVerifyingSource, setIsVerifyingSource] = useState(false);
+  const [isVerifyingTarget, setIsVerifyingTarget] = useState(false);
   const [inviteDelay, setInviteDelay] = useState(DEFAULT_INVITE_DELAY);
   const [batchDelay, setBatchDelay] = useState(DEFAULT_BATCH_DELAY);
   const [floodWaitDelay, setFloodWaitDelay] = useState(DEFAULT_FLOOD_WAIT_DELAY);
@@ -53,20 +57,51 @@ export default function MemberScraping() {
     enabled: !!user && isSuperAdmin
   });
 
-  // Fetch all groups for selection
-  const { data: allGroups } = useQuery({
-    queryKey: ['all-telegram-groups'],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from('telegram_groups')
-        .select('*')
-        .order('title', { ascending: true });
+  const handleVerifyGroup = async (input: string, type: 'source' | 'target') => {
+    if (!input.trim()) {
+      toast.error('Lütfen grup ID veya kullanıcı adı girin');
+      return;
+    }
+
+    if (!accounts || accounts.length === 0) {
+      toast.error('Aktif hesap bulunamadı');
+      return;
+    }
+
+    const setVerifying = type === 'source' ? setIsVerifyingSource : setIsVerifyingTarget;
+    const setGroupInfo = type === 'source' ? setSourceGroupInfo : setTargetGroupInfo;
+
+    setVerifying(true);
+    try {
+      const account = accounts[0];
+      const client = new TelegramClient(
+        new StringSession(account.session_string || ''),
+        parseInt(account.telegram_api_credentials.api_id),
+        account.telegram_api_credentials.api_hash,
+        { connectionRetries: 5 }
+      );
+
+      await client.connect();
       
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!user && isSuperAdmin
-  });
+      const entity = await client.getEntity(input);
+      await client.disconnect();
+
+      const groupInfo = {
+        id: String(entity.id),
+        title: (entity as any).title || input,
+        username: (entity as any).username || null,
+      };
+
+      setGroupInfo(groupInfo);
+      toast.success(`Grup doğrulandı: ${groupInfo.title}`);
+    } catch (error: any) {
+      console.error('Group verification error:', error);
+      toast.error('Grup doğrulanamadı: ' + error.message);
+      setGroupInfo(null);
+    } finally {
+      setVerifying(false);
+    }
+  };
 
   // Fetch scraping logs
   const { data: logs, refetch: refetchLogs } = useQuery({
@@ -99,8 +134,8 @@ export default function MemberScraping() {
   };
 
   const handleStartScraping = async () => {
-    if (!sourceGroupId || !targetGroupId) {
-      toast.error('Lütfen kaynak ve hedef grupları seçin');
+    if (!sourceGroupInfo || !targetGroupInfo) {
+      toast.error('Lütfen önce grupları doğrulayın');
       return;
     }
 
@@ -113,12 +148,6 @@ export default function MemberScraping() {
     toast.info('Üye çekme işlemi başlatılıyor...');
 
     try {
-      const sourceGroup = allGroups?.find(g => g.id === sourceGroupId);
-      const targetGroup = allGroups?.find(g => g.id === targetGroupId);
-
-      if (!sourceGroup || !targetGroup) {
-        throw new Error('Gruplar bulunamadı');
-      }
 
       // Get today's date for checking limits
       const today = new Date().toISOString().split('T')[0];
@@ -136,10 +165,10 @@ export default function MemberScraping() {
           await supabase.from('member_scraping_logs').insert({
             created_by: user?.id,
             account_id: account.id,
-            source_group_id: sourceGroupId,
-            target_group_id: targetGroupId,
-            source_group_title: sourceGroup.title,
-            target_group_title: targetGroup.title,
+            source_group_id: sourceGroupInfo.id,
+            target_group_id: targetGroupInfo.id,
+            source_group_title: sourceGroupInfo.title,
+            target_group_title: targetGroupInfo.title,
             members_added: 0,
             status: 'skipped',
             error_message: `Günlük limit aşıldı (${DAILY_LIMIT_PER_ACCOUNT} üye)`,
@@ -163,10 +192,10 @@ export default function MemberScraping() {
           toast.info(`${account.name || account.phone_number} hesabıyla üye çekimi başlatıldı`);
 
           // Get members from source group
-          const sourceEntity = await client.getEntity(sourceGroup.telegram_id);
+          const sourceEntity = await client.getEntity(sourceGroupInput);
           const participants = await client.getParticipants(sourceEntity, { limit: 200 });
 
-          const targetEntity = await client.getEntity(targetGroup.telegram_id);
+          const targetEntity = await client.getEntity(targetGroupInput);
           
           let addedCount = 0;
           const currentLimit = limitData?.members_added_today || 0;
@@ -179,11 +208,16 @@ export default function MemberScraping() {
             }
 
             try {
-              // Try to add user to target group
+              // Skip bots and deleted accounts
+              if ((participant as any).bot || (participant as any).deleted) {
+                continue;
+              }
+
+              // Try to add user to target group using user ID
               await client.invoke(
                 new Api.channels.InviteToChannel({
                   channel: targetEntity,
-                  users: [participant],
+                  users: [await client.getInputEntity(participant.id)],
                 })
               );
 
@@ -222,10 +256,10 @@ export default function MemberScraping() {
           await supabase.from('member_scraping_logs').insert({
             created_by: user?.id,
             account_id: account.id,
-            source_group_id: sourceGroupId,
-            target_group_id: targetGroupId,
-            source_group_title: sourceGroup.title,
-            target_group_title: targetGroup.title,
+            source_group_id: sourceGroupInfo.id,
+            target_group_id: targetGroupInfo.id,
+            source_group_title: sourceGroupInfo.title,
+            target_group_title: targetGroupInfo.title,
             members_added: addedCount,
             status: 'success',
           });
@@ -240,10 +274,10 @@ export default function MemberScraping() {
           await supabase.from('member_scraping_logs').insert({
             created_by: user?.id,
             account_id: account.id,
-            source_group_id: sourceGroupId,
-            target_group_id: targetGroupId,
-            source_group_title: sourceGroup.title,
-            target_group_title: targetGroup.title,
+            source_group_id: sourceGroupInfo.id,
+            target_group_id: targetGroupInfo.id,
+            source_group_title: sourceGroupInfo.title,
+            target_group_title: targetGroupInfo.title,
             members_added: 0,
             status: 'error',
             error_message: error.message || 'Bilinmeyen hata',
@@ -331,35 +365,63 @@ export default function MemberScraping() {
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="source-group">Kaynak Grup</Label>
-                  <Select value={sourceGroupId} onValueChange={setSourceGroupId}>
-                    <SelectTrigger id="source-group">
-                      <SelectValue placeholder="Grup seçin..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {allGroups?.map((group) => (
-                        <SelectItem key={group.id} value={group.id}>
-                          {group.title}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="source-group">Kaynak Grup (ID veya @username)</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="source-group"
+                      placeholder="Örn: -1001234567890 veya @grupadi"
+                      value={sourceGroupInput}
+                      onChange={(e) => setSourceGroupInput(e.target.value)}
+                      disabled={isVerifyingSource}
+                    />
+                    <Button
+                      onClick={() => handleVerifyGroup(sourceGroupInput, 'source')}
+                      disabled={isVerifyingSource || !sourceGroupInput.trim()}
+                      variant="outline"
+                      size="sm"
+                    >
+                      {isVerifyingSource ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        'Doğrula'
+                      )}
+                    </Button>
+                  </div>
+                  {sourceGroupInfo && (
+                    <p className="text-sm text-muted-foreground">
+                      ✓ {sourceGroupInfo.title}
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-2">
-                  <Label htmlFor="target-group">Hedef Grup</Label>
-                  <Select value={targetGroupId} onValueChange={setTargetGroupId}>
-                    <SelectTrigger id="target-group">
-                      <SelectValue placeholder="Grup seçin..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {allGroups?.map((group) => (
-                        <SelectItem key={group.id} value={group.id}>
-                          {group.title}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <Label htmlFor="target-group">Hedef Grup (ID veya @username)</Label>
+                  <div className="flex gap-2">
+                    <Input
+                      id="target-group"
+                      placeholder="Örn: -1001234567890 veya @grupadi"
+                      value={targetGroupInput}
+                      onChange={(e) => setTargetGroupInput(e.target.value)}
+                      disabled={isVerifyingTarget}
+                    />
+                    <Button
+                      onClick={() => handleVerifyGroup(targetGroupInput, 'target')}
+                      disabled={isVerifyingTarget || !targetGroupInput.trim()}
+                      variant="outline"
+                      size="sm"
+                    >
+                      {isVerifyingTarget ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        'Doğrula'
+                      )}
+                    </Button>
+                  </div>
+                  {targetGroupInfo && (
+                    <p className="text-sm text-muted-foreground">
+                      ✓ {targetGroupInfo.title}
+                    </p>
+                  )}
                 </div>
 
                 <div className="space-y-4 pt-2 border-t">
@@ -402,7 +464,7 @@ export default function MemberScraping() {
 
                 <Button
                   onClick={handleStartScraping} 
-                  disabled={isScraperRunning || !sourceGroupId || !targetGroupId}
+                  disabled={isScraperRunning || !sourceGroupInfo || !targetGroupInfo}
                   className="w-full"
                 >
                   {isScraperRunning ? (
