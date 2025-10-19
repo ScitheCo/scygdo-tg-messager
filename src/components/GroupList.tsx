@@ -97,17 +97,20 @@ export const GroupList = () => {
           groups.map((group) => (
             <div
               key={group.id}
-            className={`flex items-center gap-3 p-2.5 md:p-3 rounded-lg border transition-all duration-200 ${
+              onClick={() => toggleGroup(group.id.toString())}
+            className={`flex items-center gap-3 p-2.5 md:p-3 rounded-lg border transition-all duration-200 cursor-pointer ${
               selectedGroupIds.includes(group.id.toString())
                 ? 'bg-secondary/10 border-secondary'
                 : 'bg-muted/30 border-border hover:bg-muted/50'
             }`}
           >
-            <Checkbox
-              checked={selectedGroupIds.includes(group.id.toString())}
-              onCheckedChange={() => toggleGroup(group.id.toString())}
-              className="border-border data-[state=checked]:bg-secondary data-[state=checked]:border-secondary"
-            />
+            <div onClick={(e) => e.stopPropagation()}>
+              <Checkbox
+                checked={selectedGroupIds.includes(group.id.toString())}
+                onCheckedChange={() => toggleGroup(group.id.toString())}
+                className="border-border data-[state=checked]:bg-secondary data-[state=checked]:border-secondary"
+              />
+            </div>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
                   <p className="text-sm md:text-base font-medium text-foreground truncate">{group.title}</p>
