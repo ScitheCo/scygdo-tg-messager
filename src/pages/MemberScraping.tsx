@@ -7,11 +7,12 @@ import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Progress } from '@/components/ui/progress';
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
-import { Loader2, Play, Pause, StopCircle, Trash2 } from 'lucide-react';
+import { Loader2, Play, Pause, StopCircle, Trash2, Download } from 'lucide-react';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram/tl';
@@ -30,6 +31,23 @@ interface ProgressState {
   membersAdded: number;
   totalTarget: number;
   currentLogId: string | null;
+}
+
+interface AddedMember {
+  id: string;
+  username: string;
+  firstName: string;
+  lastName: string;
+  accountUsed: string;
+  addedAt: string;
+}
+
+interface CompletionState {
+  isOpen: boolean;
+  addedMembers: AddedMember[];
+  totalAttempts: number;
+  successCount: number;
+  failedCount: number;
 }
 
 export default function MemberScraping() {
@@ -54,6 +72,15 @@ export default function MemberScraping() {
     membersAdded: 0,
     totalTarget: 0,
     currentLogId: null,
+  });
+  
+  // Completion dialog state
+  const [completedScraping, setCompletedScraping] = useState<CompletionState>({
+    isOpen: false,
+    addedMembers: [],
+    totalAttempts: 0,
+    successCount: 0,
+    failedCount: 0,
   });
   
   // Use ref to track status for async operations (mutable across function calls)
@@ -207,9 +234,13 @@ export default function MemberScraping() {
 
     toast.info('Üye çekme işlemi başlatıldı');
 
+    const startTime = Date.now();
+    
     try {
       const today = new Date().toISOString().split('T')[0];
       let totalAdded = 0;
+      let totalAttempts = 0;
+      const successfullyAddedMembers: AddedMember[] = [];
       
       // Create main progress log
       const { data: mainLog } = await supabase
@@ -392,18 +423,62 @@ export default function MemberScraping() {
         // Try to add member
         if (client) {
           try {
+            totalAttempts++;
             const targetEntity = await client.getEntity(targetGroupInput);
-            await client.invoke(
+            
+            // Invoke API and get result
+            const result: Api.messages.InvitedUsers = await client.invoke(
               new Api.channels.InviteToChannel({
                 channel: targetEntity,
                 users: [await client.getInputEntity(member.id)],
               })
-            );
+            ) as Api.messages.InvitedUsers;
 
-            // Success!
+            // Check if member was actually added
+            if (result.missingInvitees && result.missingInvitees.length > 0) {
+              // Member was NOT added - log the reason
+              const invitee = result.missingInvitees[0];
+              const reason = invitee.premiumRequiredForPm ? 'Premium gerekli' :
+                           invitee.premiumWouldAllowInvite ? 'Premium izin verir' :
+                           'Privacy ayarları';
+              
+              await supabase.from('member_scraping_logs').insert({
+                created_by: user?.id,
+                account_id: account.id,
+                source_group_id: sourceGroupInfo.id,
+                target_group_id: targetGroupInfo.id,
+                source_group_title: sourceGroupInfo.title,
+                target_group_title: targetGroupInfo.title,
+                members_added: 0,
+                status: 'skipped',
+                error_message: `Üye eklenemedi: ${reason}`,
+                details: {
+                  member_id: String(member.id),
+                  member_username: (member as any).username || 'N/A',
+                  member_name: `${(member as any).firstName || ''} ${(member as any).lastName || ''}`.trim(),
+                  reason: reason,
+                  attempt_number: totalAttempts,
+                },
+              });
+              
+              currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+              continue;
+            }
+
+            // Success! Member was actually added
             totalAdded++;
             accountData.todayAdded++;
             consecutiveSkips = 0;
+            
+            // Add to successfully added list
+            successfullyAddedMembers.push({
+              id: String(member.id),
+              username: (member as any).username || 'N/A',
+              firstName: (member as any).firstName || '',
+              lastName: (member as any).lastName || '',
+              accountUsed: account.name || account.phone_number,
+              addedAt: new Date().toISOString(),
+            });
 
             // Update progress
             setCurrentProgress(prev => ({ ...prev, membersAdded: totalAdded }));
@@ -430,9 +505,12 @@ export default function MemberScraping() {
                 status: 'success',
                 details: {
                   account_name: account.name || account.phone_number,
+                  member_id: String(member.id),
                   member_username: (member as any).username || 'N/A',
+                  member_name: `${(member as any).firstName || ''} ${(member as any).lastName || ''}`.trim(),
                   round_robin_index: currentAccountIndex,
                   total_progress: `${totalAdded}/${dailyLimit * accounts.length}`,
+                  attempt_number: totalAttempts,
                 },
               });
 
@@ -453,6 +531,38 @@ export default function MemberScraping() {
                   },
                 })
                 .eq('id', mainLog.id);
+            }
+
+            // Verification check every 10 members
+            if (totalAdded % 10 === 0 && totalAdded > 0) {
+              try {
+                const targetEntity = await client.getEntity(targetGroupInput);
+                const currentTargetMembers = await client.getParticipants(targetEntity, { limit: 1000 });
+                const targetIds = new Set(currentTargetMembers.map(p => String(p.id)));
+                
+                const verifiedCount = successfullyAddedMembers.filter(m => 
+                  targetIds.has(m.id)
+                ).length;
+                
+                await supabase.from('member_scraping_logs').insert({
+                  created_by: user?.id,
+                  account_id: account.id,
+                  source_group_id: sourceGroupInfo.id,
+                  target_group_id: targetGroupInfo.id,
+                  source_group_title: sourceGroupInfo.title,
+                  target_group_title: targetGroupInfo.title,
+                  members_added: 0,
+                  status: 'info',
+                  details: {
+                    phase: 'verification',
+                    claimed_added: totalAdded,
+                    verified_added: verifiedCount,
+                    discrepancy: totalAdded - verifiedCount,
+                  },
+                });
+              } catch (verifyError) {
+                console.error('Verification error:', verifyError);
+              }
             }
 
             // Smart delays
@@ -526,8 +636,11 @@ export default function MemberScraping() {
         }
       }
 
-      // Update final main log
+      // Update final main log with statistics
       if (mainLog?.id) {
+        const durationSeconds = Math.floor((Date.now() - startTime) / 1000);
+        const successRate = totalAttempts > 0 ? Math.round((totalAdded / totalAttempts) * 100) : 0;
+        
         await supabase
           .from('member_scraping_logs')
           .update({
@@ -535,16 +648,37 @@ export default function MemberScraping() {
             members_added: totalAdded,
             details: {
               phase: 'completed',
-              total_added: totalAdded,
-              target: dailyLimit * accounts.length,
-              completion_percentage: Math.round((totalAdded / (dailyLimit * accounts.length)) * 100),
+              statistics: {
+                total_attempts: totalAttempts,
+                successful: totalAdded,
+                failed: totalAttempts - totalAdded,
+                success_rate: successRate,
+                duration_seconds: durationSeconds,
+              },
+              added_members: successfullyAddedMembers.slice(0, 100).map(m => ({
+                id: m.id,
+                username: m.username,
+                firstName: m.firstName,
+                lastName: m.lastName,
+                accountUsed: m.accountUsed,
+                addedAt: m.addedAt,
+              })),
             },
           })
           .eq('id', mainLog.id);
       }
 
       if (statusRef.current !== 'cancelled') {
-        toast.success(`✅ İşlem tamamlandı! Toplam ${totalAdded} üye eklendi.`);
+        // Show completion dialog
+        setCompletedScraping({
+          isOpen: true,
+          addedMembers: successfullyAddedMembers,
+          totalAttempts,
+          successCount: totalAdded,
+          failedCount: totalAttempts - totalAdded,
+        });
+        
+        toast.success(`✅ ${totalAdded} üye başarıyla eklendi!`);
       }
     } catch (error: any) {
       console.error('Scraping error:', error);
@@ -610,9 +744,27 @@ export default function MemberScraping() {
         return <Badge variant="outline" className="bg-gray-500/10 text-gray-600 border-gray-500/20">İptal Edildi</Badge>;
       case 'flood_wait':
         return <Badge variant="outline" className="bg-orange-500/10 text-orange-600 border-orange-500/20">Flood Bekliyor</Badge>;
+      case 'info':
+        return <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-500/20">Bilgi</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
+  };
+
+  const handleExportCSV = () => {
+    const headers = 'Ad,Soyad,Kullanıcı Adı,Hesap,Eklenme Zamanı\n';
+    const csv = headers + completedScraping.addedMembers.map(m => 
+      `"${m.firstName}","${m.lastName}","${m.username}","${m.accountUsed}","${new Date(m.addedAt).toLocaleString('tr-TR')}"`
+    ).join('\n');
+    
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `eklenen-uyeler-${Date.now()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success('CSV dosyası indirildi');
   };
 
   if (!isSuperAdmin) {
@@ -636,6 +788,102 @@ export default function MemberScraping() {
   return (
     <div className="min-h-screen bg-background flex flex-col">
       <Header />
+      
+      {/* Completion Dialog */}
+      <Dialog open={completedScraping.isOpen} onOpenChange={(open) => 
+        setCompletedScraping(prev => ({ ...prev, isOpen: open }))
+      }>
+        <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle>✅ Üye Çekme İşlemi Tamamlandı</DialogTitle>
+            <DialogDescription>
+              Toplam {completedScraping.totalAttempts} deneme yapıldı, 
+              {completedScraping.successCount} üye başarıyla eklendi.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 flex-1 overflow-hidden flex flex-col">
+            <div className="grid grid-cols-3 gap-4 flex-shrink-0">
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Başarılı</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold text-green-600">
+                    {completedScraping.successCount}
+                  </p>
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Başarısız</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold text-red-600">
+                    {completedScraping.failedCount}
+                  </p>
+                </CardContent>
+              </Card>
+              
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-sm">Başarı Oranı</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  <p className="text-2xl font-bold text-blue-600">
+                    {completedScraping.totalAttempts > 0 
+                      ? Math.round((completedScraping.successCount / completedScraping.totalAttempts) * 100)
+                      : 0}%
+                  </p>
+                </CardContent>
+              </Card>
+            </div>
+            
+            <div className="flex-1 overflow-hidden flex flex-col">
+              <h3 className="font-semibold mb-2 flex-shrink-0">Eklenen Üyeler ({completedScraping.addedMembers.length}):</h3>
+              <ScrollArea className="flex-1 border rounded-md p-4">
+                <div className="space-y-2">
+                  {completedScraping.addedMembers.map((member, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-3 bg-muted rounded-lg">
+                      <div className="flex-1">
+                        <p className="font-medium">
+                          {member.firstName} {member.lastName}
+                        </p>
+                        <p className="text-sm text-muted-foreground">
+                          @{member.username}
+                        </p>
+                      </div>
+                      <Badge variant="outline" className="ml-2">
+                        {member.accountUsed}
+                      </Badge>
+                    </div>
+                  ))}
+                  {completedScraping.addedMembers.length === 0 && (
+                    <p className="text-center text-muted-foreground py-8">
+                      Hiç üye eklenmedi
+                    </p>
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+          </div>
+          
+          <DialogFooter className="flex-shrink-0">
+            <Button 
+              variant="outline" 
+              onClick={handleExportCSV}
+              disabled={completedScraping.addedMembers.length === 0}
+            >
+              <Download className="h-4 w-4 mr-2" />
+              CSV İndir
+            </Button>
+            <Button onClick={() => setCompletedScraping(prev => ({ ...prev, isOpen: false }))}>
+              Kapat
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
       
       <main className="flex-1 container mx-auto p-4 md:p-6">
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 md:gap-6">
