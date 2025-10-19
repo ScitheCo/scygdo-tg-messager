@@ -173,7 +173,7 @@ export default function MemberScraping() {
 
     try {
 
-      // Get today's date for checking limits
+      // Get today's date for checking limits (UTC based - Telegram resets limits at UTC 00:00)
       const today = new Date().toISOString().split('T')[0];
 
       for (const account of accounts) {

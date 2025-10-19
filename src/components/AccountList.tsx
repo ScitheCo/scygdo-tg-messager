@@ -36,6 +36,33 @@ export const AccountList = () => {
     enabled: !!user
   });
 
+  // Fetch daily limits for accounts
+  const { data: dailyLimits = [] } = useQuery({
+    queryKey: ['account-daily-limits', user?.id],
+    queryFn: async () => {
+      const today = new Date().toISOString().split('T')[0]; // UTC date
+      const accountIds = accounts.map(acc => acc.id);
+      
+      if (accountIds.length === 0) return [];
+      
+      const { data, error } = await supabase
+        .from('account_daily_limits')
+        .select('*')
+        .eq('date', today)
+        .in('account_id', accountIds);
+      
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!user && accounts.length > 0
+  });
+
+  // Helper to check if account has reached daily limit
+  const getAccountLimitStatus = (accountId: string) => {
+    const limit = dailyLimits.find(l => l.account_id === accountId);
+    return limit;
+  };
+
   const activeAccounts = accounts.filter(acc => acc.is_active);
   const allSelected = activeAccounts.length > 0 && 
     activeAccounts.every((acc) => selectedAccountIds.includes(acc.id.toString()));
@@ -228,13 +255,33 @@ export const AccountList = () => {
                       Pasif
                     </Badge>
                   ) : (
-                    <Badge variant="default" className="text-xs bg-success">
-                      Aktif
-                    </Badge>
+                    <>
+                      <Badge variant="default" className="text-xs bg-success">
+                        Aktif
+                      </Badge>
+                      {(() => {
+                        const limitStatus = getAccountLimitStatus(account.id);
+                        if (limitStatus && limitStatus.members_added_today >= 50) {
+                          return (
+                            <Badge variant="outline" className="text-xs bg-orange-500/10 text-orange-600 border-orange-500/20">
+                              Üye Çekimi Limit Doldu
+                            </Badge>
+                          );
+                        }
+                        return null;
+                      })()}
+                    </>
                   )}
                 </div>
                 <p className="text-xs text-muted-foreground mt-1">
                   {account.phone_number}
+                  {(() => {
+                    const limitStatus = getAccountLimitStatus(account.id);
+                    if (limitStatus) {
+                      return ` • ${limitStatus.members_added_today || 0} üye eklendi`;
+                    }
+                    return '';
+                  })()}
                 </p>
               </div>
               <div className="flex gap-1" onClick={(e) => e.stopPropagation()}>
