@@ -9,8 +9,10 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
+import { useAuth } from '@/hooks/useAuth';
 
 export const AccountList = () => {
+  const { user } = useAuth();
   const {
     selectedAccountIds,
     toggleAccount,
@@ -20,16 +22,18 @@ export const AccountList = () => {
   const queryClient = useQueryClient();
 
   const { data: accounts = [], refetch } = useQuery({
-    queryKey: ['telegram-accounts'],
+    queryKey: ['telegram-accounts', user?.id],
     queryFn: async () => {
       const { data, error } = await supabase
         .from('telegram_accounts')
         .select('*')
+        .eq('created_by', user?.id)
         .order('created_at', { ascending: false });
       
       if (error) throw error;
       return data || [];
-    }
+    },
+    enabled: !!user
   });
 
   const activeAccounts = accounts.filter(acc => acc.is_active);
