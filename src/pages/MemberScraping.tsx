@@ -48,6 +48,12 @@ interface CompletionState {
   totalAttempts: number;
   successCount: number;
   failedCount: number;
+  accountStats: Array<{
+    accountName: string;
+    targetSuccess: number;
+    achievedSuccess: number;
+    attempts: number;
+  }>;
 }
 
 export default function MemberScraping() {
@@ -81,6 +87,7 @@ export default function MemberScraping() {
     totalAttempts: 0,
     successCount: 0,
     failedCount: 0,
+    accountStats: [],
   });
   
   // Use ref to track status for async operations (mutable across function calls)
@@ -211,6 +218,50 @@ export default function MemberScraping() {
     }
   };
 
+  // Helper: Fetch ALL participants from target group with pagination
+  const fetchAllParticipants = async (client: TelegramClient, groupInput: string): Promise<Set<string>> => {
+    const allMemberIds = new Set<string>();
+    const targetEntity = await client.getEntity(groupInput);
+    let offset = 0;
+    const limit = 1000;
+
+    while (true) {
+      const batch = await client.getParticipants(targetEntity, { limit, offset });
+      if (!batch || batch.length === 0) break;
+      
+      batch.forEach(p => allMemberIds.add(String(p.id)));
+      offset += batch.length;
+      
+      if (batch.length < limit) break; // Last page
+    }
+    
+    return allMemberIds;
+  };
+
+  // Helper: Check if user is participant in target group
+  const getParticipantInTarget = async (client: TelegramClient, userId: any, targetInput: string): Promise<boolean> => {
+    try {
+      const targetEntity = await client.getEntity(targetInput);
+      const userEntity = await client.getInputEntity(userId);
+      
+      await client.invoke(
+        new Api.channels.GetParticipant({
+          channel: targetEntity,
+          participant: userEntity,
+        })
+      );
+      
+      // If no error thrown, user is a participant
+      return true;
+    } catch (error: any) {
+      if (error.message?.includes('USER_NOT_PARTICIPANT')) {
+        return false;
+      }
+      // Other errors mean we can't determine, assume not participant to be safe
+      return false;
+    }
+  };
+
   const handleStartScraping = async () => {
     if (!sourceGroupInfo || !targetGroupInfo) {
       toast.error('Lütfen önce grupları doğrulayın');
@@ -222,25 +273,48 @@ export default function MemberScraping() {
       return;
     }
 
-    setScrapingStatus('running');
-    setCurrentProgress({
-      currentAccount: '',
-      currentAccountIndex: 0,
-      totalAccounts: accounts.length,
-      membersAdded: 0,
-      totalTarget: dailyLimit * accounts.length,
-      currentLogId: null,
-    });
-
-    toast.info('Üye çekme işlemi başlatıldı');
-
     const startTime = Date.now();
+    const today = new Date().toISOString().split('T')[0];
     
     try {
-      const today = new Date().toISOString().split('T')[0];
+      // Fetch today's limits for all accounts
+      const { data: limitsData } = await supabase
+        .from('account_daily_limits')
+        .select('account_id, members_added_today')
+        .eq('date', today)
+        .in('account_id', accounts.map(a => a.id));
+      
+      const limitsMap = new Map(limitsData?.map(l => [l.account_id, l.members_added_today]) || []);
+      
+      // Calculate total target
+      let totalTargetSuccess = 0;
+      for (const account of accounts) {
+        const todayAdded = limitsMap.get(account.id) || 0;
+        const remainingForAccount = Math.max(0, dailyLimit - todayAdded);
+        totalTargetSuccess += remainingForAccount;
+      }
+
+      if (totalTargetSuccess === 0) {
+        toast.error('Tüm hesaplar günlük limitine ulaşmış');
+        return;
+      }
+
+      setScrapingStatus('running');
+      setCurrentProgress({
+        currentAccount: '',
+        currentAccountIndex: 0,
+        totalAccounts: accounts.length,
+        membersAdded: 0,
+        totalTarget: totalTargetSuccess,
+        currentLogId: null,
+      });
+
+      toast.info('Üye çekme işlemi başlatıldı');
+      
       let totalAdded = 0;
       let totalAttempts = 0;
       const successfullyAddedMembers: AddedMember[] = [];
+      const accountStats: Array<{ accountName: string; targetSuccess: number; achievedSuccess: number; attempts: number; }> = [];
       
       // Create main progress log
       const { data: mainLog } = await supabase
@@ -256,26 +330,15 @@ export default function MemberScraping() {
           details: {
             phase: 'initializing',
             total_accounts: accounts.length,
+            total_target: totalTargetSuccess,
           },
         })
         .select()
         .single();
 
-      // STEP 1: Get all members from source and target groups
-      const accountMembersData: Array<{
-        account: any;
-        client: TelegramClient | null;
-        sourceMembers: any[];
-        memberIndex: number;
-        todayAdded: number;
-        isFloodWaiting: boolean;
-        floodWaitUntil: number;
-      }> = [];
-
-      // GLOBAL target member IDs - shared across ALL accounts to prevent duplicates
+      // STEP 1: Fetch ALL target members with full pagination
       let globalTargetMemberIds = new Set<string>();
       
-      // Initialize global target member IDs using first account
       try {
         const firstAccount = accounts[0];
         const firstClient = new TelegramClient(
@@ -285,20 +348,32 @@ export default function MemberScraping() {
           { connectionRetries: 5 }
         );
         await firstClient.connect();
-        const targetEntity = await firstClient.getEntity(targetGroupInput);
-        const targetParticipants = await firstClient.getParticipants(targetEntity, { limit: 5000 });
-        globalTargetMemberIds = new Set(targetParticipants.map(p => String(p.id)));
+        
+        await logToDatabase('info', 'Hedef grup üyeleri tam sayım ile alınıyor...', 0);
+        globalTargetMemberIds = await fetchAllParticipants(firstClient, targetGroupInput);
         await firstClient.disconnect();
         
-        await logToDatabase('info', `Hedef grupta mevcut ${globalTargetMemberIds.size} üye tespit edildi`, 0);
-        console.log(`🎯 Global target member IDs initialized: ${globalTargetMemberIds.size} existing members`);
+        await logToDatabase('info', `✅ Hedef grupta toplam ${globalTargetMemberIds.size} üye tespit edildi`, 0);
+        console.log(`🎯 Full pagination complete: ${globalTargetMemberIds.size} existing members in target`);
       } catch (error: any) {
-        console.error('Error initializing global target IDs:', error);
+        console.error('Error fetching all target members:', error);
         await logToDatabase('error', `Hedef grup üyeleri alınamadı: ${error.message}`, 0);
         throw error;
       }
 
-      // Fetch members for each account
+      // STEP 2: Fetch source members and prepare account data
+      const accountMembersData: Array<{
+        account: any;
+        client: TelegramClient | null;
+        candidateQueue: any[]; // Pre-filtered candidates
+        todayAdded: number;
+        successCountThisSession: number;
+        attemptsThisSession: number;
+        targetSuccess: number;
+        isFloodWaiting: boolean;
+        floodWaitUntil: number;
+      }> = [];
+
       for (const account of accounts) {
         if (statusRef.current === 'cancelled') break;
 
@@ -312,76 +387,112 @@ export default function MemberScraping() {
 
           await client.connect();
 
-          // Get source group members
+          // Get source group members with higher limit
           const sourceEntity = await client.getEntity(sourceGroupInput);
-          const sourceParticipants = await client.getParticipants(sourceEntity, { limit: 500 });
+          const sourceParticipants = await client.getParticipants(sourceEntity, { limit: 2000 });
 
-          // Check today's limit
-          const { data: limitData } = await supabase
-            .from('account_daily_limits')
-            .select('members_added_today')
-            .eq('account_id', account.id)
-            .eq('date', today)
-            .maybeSingle();
+          // Pre-filter: remove bots, deleted, restricted, already in target
+          const candidateQueue = sourceParticipants.filter(member => {
+            if ((member as any).bot || (member as any).deleted || (member as any).restricted) return false;
+            const status = (member as any).status;
+            if (status?.className === 'UserStatusEmpty') return false;
+            const memberId = String(member.id);
+            if (globalTargetMemberIds.has(memberId)) return false;
+            return true;
+          });
 
-          const todayAdded = limitData?.members_added_today || 0;
+          const todayAdded = limitsMap.get(account.id) || 0;
+          const targetSuccess = Math.max(0, dailyLimit - todayAdded);
 
           accountMembersData.push({
             account,
             client,
-            sourceMembers: sourceParticipants,
-            memberIndex: 0,
+            candidateQueue,
             todayAdded,
+            successCountThisSession: 0,
+            attemptsThisSession: 0,
+            targetSuccess,
             isFloodWaiting: false,
             floodWaitUntil: 0,
           });
 
-          await supabase
-            .from('member_scraping_logs')
-            .insert({
-              created_by: user?.id,
-              account_id: account.id,
-              source_group_id: sourceGroupInfo.id,
-              target_group_id: targetGroupInfo.id,
-              source_group_title: sourceGroupInfo.title,
-              target_group_title: targetGroupInfo.title,
-              members_added: 0,
-              status: 'in_progress',
-              details: {
-                phase: 'members_fetched',
-                account_name: account.name || account.phone_number,
-                source_count: sourceParticipants.length,
-                target_count: globalTargetMemberIds.size,
-              },
-            });
+          await supabase.from('member_scraping_logs').insert({
+            created_by: user?.id,
+            account_id: account.id,
+            source_group_id: sourceGroupInfo.id,
+            target_group_id: targetGroupInfo.id,
+            source_group_title: sourceGroupInfo.title,
+            target_group_title: targetGroupInfo.title,
+            members_added: 0,
+            status: 'in_progress',
+            details: {
+              phase: 'prepared',
+              account_name: account.name || account.phone_number,
+              candidates_count: candidateQueue.length,
+              target_success: targetSuccess,
+              today_added: todayAdded,
+            },
+          });
         } catch (error: any) {
-          console.error(`Error fetching members for ${account.name}:`, error);
-          await logToDatabase('error', `${account.name}: Üye listesi alınamadı - ${error.message}`, 0, account.id);
+          console.error(`Error preparing ${account.name}:`, error);
+          await logToDatabase('error', `${account.name}: Hazırlık hatası - ${error.message}`, 0, account.id);
         }
       }
 
       if (accountMembersData.length === 0) {
-        throw new Error('Hiçbir hesaptan üye listesi alınamadı');
+        throw new Error('Hiçbir hesap hazırlanamadı');
       }
 
-      // STEP 2: Round-robin member addition
+      // STEP 3: Round-robin with proper termination criteria
       let currentAccountIndex = 0;
-      let consecutiveSkips = 0;
-      const maxConsecutiveSkips = accountMembersData.length * 3;
+      let allAccountsFinished = false;
 
-      while (totalAdded < dailyLimit * accounts.length && consecutiveSkips < maxConsecutiveSkips) {
-        // Check pause/cancel
-        while (statusRef.current === 'paused') {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-
+      while (!allAccountsFinished) {
         if (statusRef.current === 'cancelled') {
           await logToDatabase('cancelled', 'İşlem kullanıcı tarafından iptal edildi', totalAdded);
           break;
         }
 
+        // Check pause
+        while (statusRef.current === 'paused') {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+
+        // Find next available account
+        let attempts = 0;
+        let foundAccount = false;
+        
+        while (attempts < accountMembersData.length) {
+          const accountData = accountMembersData[currentAccountIndex];
+          const { account, client, candidateQueue, successCountThisSession, targetSuccess, isFloodWaiting, floodWaitUntil } = accountData;
+
+          // Check if account can continue
+          const reachedTarget = successCountThisSession >= targetSuccess;
+          const noMoreCandidates = candidateQueue.length === 0;
+          const inFloodWait = isFloodWaiting && Date.now() < floodWaitUntil;
+
+          if (!reachedTarget && !noMoreCandidates && !inFloodWait) {
+            foundAccount = true;
+            break;
+          }
+
+          // Clear flood wait if time passed
+          if (isFloodWaiting && Date.now() >= floodWaitUntil) {
+            accountData.isFloodWaiting = false;
+          }
+
+          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+          attempts++;
+        }
+
+        if (!foundAccount) {
+          // All accounts finished
+          allAccountsFinished = true;
+          break;
+        }
+
         const accountData = accountMembersData[currentAccountIndex];
-        const { account, client, sourceMembers, memberIndex, todayAdded, isFloodWaiting, floodWaitUntil } = accountData;
+        const { account, client, candidateQueue } = accountData;
 
         // Update progress UI
         setCurrentProgress({
@@ -389,115 +500,62 @@ export default function MemberScraping() {
           currentAccountIndex: currentAccountIndex + 1,
           totalAccounts: accounts.length,
           membersAdded: totalAdded,
-          totalTarget: dailyLimit * accounts.length,
+          totalTarget: totalTargetSuccess,
           currentLogId: mainLog?.id || null,
         });
 
-        // Skip if account reached daily limit
-        if (todayAdded >= dailyLimit) {
-          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
-          consecutiveSkips++;
-          continue;
-        }
-
-        // Skip if account is in flood wait
-        if (isFloodWaiting && Date.now() < floodWaitUntil) {
-          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
-          consecutiveSkips++;
-          continue;
-        } else if (isFloodWaiting && Date.now() >= floodWaitUntil) {
-          accountData.isFloodWaiting = false;
-        }
-
-        // Skip if no more members to process
-        if (memberIndex >= sourceMembers.length) {
-          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
-          consecutiveSkips++;
-          continue;
-        }
-
-        // Get next member
-        const member = sourceMembers[memberIndex];
-        accountData.memberIndex++;
-
-        // Filter members
-        if ((member as any).bot || (member as any).deleted || (member as any).restricted) {
+        // Get next candidate
+        const member = candidateQueue.shift();
+        if (!member) {
           currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
           continue;
         }
 
-        // Skip UserStatusEmpty
-        const status = (member as any).status;
-        if (status?.className === 'UserStatusEmpty') {
-          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
-          continue;
-        }
-
-        // Skip if already in target group (check global Set)
         const memberId = String(member.id);
-        if (globalTargetMemberIds.has(memberId)) {
-          console.log(`⏭️ Skipping ${memberId} - already in target group`);
-          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
-          continue;
-        }
 
-        // Try to add member
+        // Double-check: verify user is NOT already in target (definitive check)
         if (client) {
           try {
-            totalAttempts++;
-            const targetEntity = await client.getEntity(targetGroupInput);
-            
-            // Invoke API and get result
-            const result: Api.messages.InvitedUsers = await client.invoke(
-              new Api.channels.InviteToChannel({
-                channel: targetEntity,
-                users: [await client.getInputEntity(member.id)],
-              })
-            ) as Api.messages.InvitedUsers;
-
-            // Check if member was actually added
-            if (result.missingInvitees && result.missingInvitees.length > 0) {
-              // Member was NOT added - log the reason
-              const invitee = result.missingInvitees[0];
-              const reason = invitee.premiumRequiredForPm ? 'Premium gerekli' :
-                           invitee.premiumWouldAllowInvite ? 'Premium izin verir' :
-                           'Privacy ayarları';
-              
-              await supabase.from('member_scraping_logs').insert({
-                created_by: user?.id,
-                account_id: account.id,
-                source_group_id: sourceGroupInfo.id,
-                target_group_id: targetGroupInfo.id,
-                source_group_title: sourceGroupInfo.title,
-                target_group_title: targetGroupInfo.title,
-                members_added: 0,
-                status: 'skipped',
-                error_message: `Üye eklenemedi: ${reason}`,
-                details: {
-                  member_id: String(member.id),
-                  member_username: (member as any).username || 'N/A',
-                  member_name: `${(member as any).firstName || ''} ${(member as any).lastName || ''}`.trim(),
-                  reason: reason,
-                  attempt_number: totalAttempts,
-                },
-              });
-              
+            const isAlreadyMember = await getParticipantInTarget(client, member.id, targetGroupInput);
+            if (isAlreadyMember) {
+              console.log(`⏭️ Pre-invite check: ${memberId} already in target, skipping`);
               currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
               continue;
             }
+          } catch (error: any) {
+            console.error('Pre-invite verification error:', error);
+          }
+        }
 
-            // Success! Member was actually added
+        // Try to add member (this is an ATTEMPT)
+        if (client) {
+          try {
+            totalAttempts++;
+            accountData.attemptsThisSession++;
+            
+            const targetEntity = await client.getEntity(targetGroupInput);
+            const userEntity = await client.getInputEntity(member.id);
+            
+            // Invoke InviteToChannel
+            await client.invoke(
+              new Api.channels.InviteToChannel({
+                channel: targetEntity,
+                users: [userEntity],
+              })
+            );
+
+            // If no error thrown, consider it success
             totalAdded++;
+            accountData.successCountThisSession++;
             accountData.todayAdded++;
-            consecutiveSkips = 0;
             
-            // Add member ID to global Set to prevent duplicate additions
+            // Update global set immediately
             globalTargetMemberIds.add(memberId);
-            console.log(`✅ Added ${memberId} - Global target now has ${globalTargetMemberIds.size} members`);
+            console.log(`✅ Successfully added ${memberId} via ${account.name}`);
             
-            // Add to successfully added list
+            // Add to success list
             successfullyAddedMembers.push({
-              id: String(member.id),
+              id: memberId,
               username: (member as any).username || 'N/A',
               firstName: (member as any).firstName || '',
               lastName: (member as any).lastName || '',
@@ -508,7 +566,7 @@ export default function MemberScraping() {
             // Update progress
             setCurrentProgress(prev => ({ ...prev, membersAdded: totalAdded }));
 
-            // Update daily limit
+            // Update daily limit in DB
             await supabase.from('account_daily_limits').upsert({
               account_id: account.id,
               date: today,
@@ -517,30 +575,30 @@ export default function MemberScraping() {
             });
 
             // Log success
-            await supabase
-              .from('member_scraping_logs')
-              .insert({
-                created_by: user?.id,
-                account_id: account.id,
-                source_group_id: sourceGroupInfo.id,
-                target_group_id: targetGroupInfo.id,
-                source_group_title: sourceGroupInfo.title,
-                target_group_title: targetGroupInfo.title,
-                members_added: 1,
-                status: 'success',
-                details: {
-                  account_name: account.name || account.phone_number,
-                  member_id: String(member.id),
-                  member_username: (member as any).username || 'N/A',
-                  member_name: `${(member as any).firstName || ''} ${(member as any).lastName || ''}`.trim(),
-                  round_robin_index: currentAccountIndex,
-                  total_progress: `${totalAdded}/${dailyLimit * accounts.length}`,
-                  attempt_number: totalAttempts,
+            await supabase.from('member_scraping_logs').insert({
+              created_by: user?.id,
+              account_id: account.id,
+              source_group_id: sourceGroupInfo.id,
+              target_group_id: targetGroupInfo.id,
+              source_group_title: sourceGroupInfo.title,
+              target_group_title: targetGroupInfo.title,
+              members_added: 1,
+              status: 'success',
+              details: {
+                account_name: account.name || account.phone_number,
+                member_id: memberId,
+                member_username: (member as any).username || 'N/A',
+                member_name: `${(member as any).firstName || ''} ${(member as any).lastName || ''}`.trim(),
+                session_stats: {
+                  success: accountData.successCountThisSession,
+                  target: accountData.targetSuccess,
+                  attempts: accountData.attemptsThisSession,
                 },
-              });
+              },
+            });
 
-            // Update main log
-            if (mainLog?.id) {
+            // Update main log periodically
+            if (mainLog?.id && totalAdded % 5 === 0) {
               await supabase
                 .from('member_scraping_logs')
                 .update({
@@ -550,48 +608,16 @@ export default function MemberScraping() {
                     current_account: account.name || account.phone_number,
                     progress: {
                       current: totalAdded,
-                      target: dailyLimit * accounts.length,
-                      percentage: Math.round((totalAdded / (dailyLimit * accounts.length)) * 100),
+                      target: totalTargetSuccess,
+                      percentage: Math.round((totalAdded / totalTargetSuccess) * 100),
                     },
                   },
                 })
                 .eq('id', mainLog.id);
             }
 
-            // Verification check every 10 members
-            if (totalAdded % 10 === 0 && totalAdded > 0) {
-              try {
-                const targetEntity = await client.getEntity(targetGroupInput);
-                const currentTargetMembers = await client.getParticipants(targetEntity, { limit: 5000 });
-                const targetIds = new Set(currentTargetMembers.map(p => String(p.id)));
-                
-                const verifiedCount = successfullyAddedMembers.filter(m => 
-                  targetIds.has(m.id)
-                ).length;
-                
-                await supabase.from('member_scraping_logs').insert({
-                  created_by: user?.id,
-                  account_id: account.id,
-                  source_group_id: sourceGroupInfo.id,
-                  target_group_id: targetGroupInfo.id,
-                  source_group_title: sourceGroupInfo.title,
-                  target_group_title: targetGroupInfo.title,
-                  members_added: 0,
-                  status: 'info',
-                  details: {
-                    phase: 'verification',
-                    claimed_added: totalAdded,
-                    verified_added: verifiedCount,
-                    discrepancy: totalAdded - verifiedCount,
-                  },
-                });
-              } catch (verifyError) {
-                console.error('Verification error:', verifyError);
-              }
-            }
-
             // Smart delays
-            if (accountData.todayAdded % 5 === 0) {
+            if (accountData.successCountThisSession % 5 === 0) {
               const randomBatchDelay = Math.random() * 5 + batchDelay;
               await new Promise(resolve => setTimeout(resolve, randomBatchDelay * 1000));
             } else {
@@ -601,12 +627,44 @@ export default function MemberScraping() {
           } catch (error: any) {
             console.error('Error adding member:', error);
 
-            // Privacy errors - skip silently
+            // Handle specific errors
+            if (error.message?.includes('USER_ALREADY_PARTICIPANT')) {
+              // User is already member - DON'T count as success
+              await supabase.from('member_scraping_logs').insert({
+                created_by: user?.id,
+                account_id: account.id,
+                source_group_id: sourceGroupInfo.id,
+                target_group_id: targetGroupInfo.id,
+                source_group_title: sourceGroupInfo.title,
+                target_group_title: targetGroupInfo.title,
+                members_added: 0,
+                status: 'skipped',
+                error_message: 'Üye zaten grupta',
+                details: {
+                  member_id: memberId,
+                  reason: 'USER_ALREADY_PARTICIPANT',
+                },
+              });
+              currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+              continue;
+            }
+
+            // Privacy/restriction errors - skip silently
             if (error.message?.includes('USER_PRIVACY_RESTRICTED') || 
                 error.message?.includes('USER_NOT_MUTUAL_CONTACT') ||
-                error.message?.includes('USER_CHANNELS_TOO_MUCH') ||
-                error.message?.includes('USER_ALREADY_PARTICIPANT')) {
-              // Skip to next account
+                error.message?.includes('USER_CHANNELS_TOO_MUCH')) {
+              await supabase.from('member_scraping_logs').insert({
+                created_by: user?.id,
+                account_id: account.id,
+                source_group_id: sourceGroupInfo.id,
+                target_group_id: targetGroupInfo.id,
+                source_group_title: sourceGroupInfo.title,
+                target_group_title: targetGroupInfo.title,
+                members_added: 0,
+                status: 'skipped',
+                error_message: error.message,
+                details: { member_id: memberId },
+              });
               currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
               continue;
             }
@@ -617,26 +675,23 @@ export default function MemberScraping() {
               accountData.isFloodWaiting = true;
               accountData.floodWaitUntil = Date.now() + (waitSeconds * 1000);
               
-              await supabase
-                .from('member_scraping_logs')
-                .insert({
-                  created_by: user?.id,
-                  account_id: account.id,
-                  source_group_id: sourceGroupInfo.id,
-                  target_group_id: targetGroupInfo.id,
-                  source_group_title: sourceGroupInfo.title,
-                  target_group_title: targetGroupInfo.title,
-                  members_added: 0,
-                  status: 'flood_wait',
-                  error_message: `Flood hatası! ${waitSeconds} saniye beklenecek`,
-                  details: {
-                    wait_seconds: waitSeconds,
-                    account_name: account.name || account.phone_number,
-                    will_resume_at: new Date(accountData.floodWaitUntil).toISOString(),
-                  },
-                });
+              await supabase.from('member_scraping_logs').insert({
+                created_by: user?.id,
+                account_id: account.id,
+                source_group_id: sourceGroupInfo.id,
+                target_group_id: targetGroupInfo.id,
+                source_group_title: sourceGroupInfo.title,
+                target_group_title: targetGroupInfo.title,
+                members_added: 0,
+                status: 'flood_wait',
+                error_message: `Flood hatası! ${waitSeconds} saniye beklenecek`,
+                details: {
+                  wait_seconds: waitSeconds,
+                  account_name: account.name || account.phone_number,
+                  will_resume_at: new Date(accountData.floodWaitUntil).toISOString(),
+                },
+              });
               
-              // Continue with next account
               currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
               continue;
             }
@@ -646,11 +701,11 @@ export default function MemberScraping() {
           }
         }
 
-        // Move to next account (round-robin)
+        // Move to next account
         currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
       }
 
-      // STEP 3: Cleanup - disconnect all clients
+      // STEP 4: Cleanup - disconnect all clients
       for (const accountData of accountMembersData) {
         if (accountData.client) {
           try {
@@ -659,6 +714,16 @@ export default function MemberScraping() {
             console.error('Error disconnecting:', e);
           }
         }
+      }
+
+      // Build per-account stats
+      for (const accountData of accountMembersData) {
+        accountStats.push({
+          accountName: accountData.account.name || accountData.account.phone_number,
+          targetSuccess: accountData.targetSuccess,
+          achievedSuccess: accountData.successCountThisSession,
+          attempts: accountData.attemptsThisSession,
+        });
       }
 
       // Update final main log with statistics
@@ -680,6 +745,7 @@ export default function MemberScraping() {
                 success_rate: successRate,
                 duration_seconds: durationSeconds,
               },
+              per_account_stats: accountStats,
               added_members: successfullyAddedMembers.slice(0, 100).map(m => ({
                 id: m.id,
                 username: m.username,
@@ -701,6 +767,7 @@ export default function MemberScraping() {
           totalAttempts,
           successCount: totalAdded,
           failedCount: totalAttempts - totalAdded,
+          accountStats,
         });
         
         toast.success(`✅ ${totalAdded} üye başarıyla eklendi!`);
@@ -864,6 +931,28 @@ export default function MemberScraping() {
                 </CardContent>
               </Card>
             </div>
+
+            {/* Per-Account Stats */}
+            {completedScraping.accountStats.length > 0 && (
+              <div className="flex-shrink-0">
+                <h3 className="font-semibold mb-2">Hesap Bazlı İstatistikler:</h3>
+                <div className="space-y-2">
+                  {completedScraping.accountStats.map((stat, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                      <div>
+                        <p className="font-medium">{stat.accountName}</p>
+                        <p className="text-sm text-muted-foreground">
+                          Hedef: {stat.targetSuccess} | Başarılı: {stat.achievedSuccess} | Deneme: {stat.attempts}
+                        </p>
+                      </div>
+                      <Badge variant={stat.achievedSuccess >= stat.targetSuccess ? "default" : "secondary"}>
+                        {stat.achievedSuccess}/{stat.targetSuccess}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
             
             <div className="flex-1 overflow-hidden flex flex-col">
               <h3 className="font-semibold mb-2 flex-shrink-0">Eklenen Üyeler ({completedScraping.addedMembers.length}):</h3>
