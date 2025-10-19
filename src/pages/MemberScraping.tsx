@@ -1,26 +1,36 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Header } from '@/components/Header';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
+import { Progress } from '@/components/ui/progress';
 import { useQuery } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/hooks/useAuth';
 import { toast } from 'sonner';
-import { Loader2, Play, Trash2 } from 'lucide-react';
+import { Loader2, Play, Pause, StopCircle, Trash2 } from 'lucide-react';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { Api } from 'telegram/tl';
 import { Input } from '@/components/ui/input';
 
-const DEFAULT_DAILY_LIMIT = 50; // Varsayılan günlük limit
-const DEFAULT_INVITE_DELAY = 3; // Davet başına bekleme süresi (saniye)
-const DEFAULT_BATCH_DELAY = 40; // 5 üye sonrası bekleme süresi (saniye)
-const DEFAULT_FLOOD_WAIT_DELAY = 5; // FLOOD_WAIT sonrası bekleme (dakika)
+const DEFAULT_DAILY_LIMIT = 50;
+const DEFAULT_INVITE_DELAY = 3;
+const DEFAULT_BATCH_DELAY = 40;
+
+type ScrapingStatus = 'idle' | 'running' | 'paused' | 'cancelled';
+
+interface ProgressState {
+  currentAccount: string;
+  currentAccountIndex: number;
+  totalAccounts: number;
+  membersAdded: number;
+  totalTarget: number;
+  currentLogId: string | null;
+}
 
 export default function MemberScraping() {
   const { user, isSuperAdmin } = useAuth();
@@ -29,13 +39,30 @@ export default function MemberScraping() {
   const [targetGroupInput, setTargetGroupInput] = useState('');
   const [sourceGroupInfo, setSourceGroupInfo] = useState<any>(null);
   const [targetGroupInfo, setTargetGroupInfo] = useState<any>(null);
-  const [isScraperRunning, setIsScraperRunning] = useState(false);
   const [isVerifyingSource, setIsVerifyingSource] = useState(false);
   const [isVerifyingTarget, setIsVerifyingTarget] = useState(false);
   const [dailyLimit, setDailyLimit] = useState(DEFAULT_DAILY_LIMIT);
   const [inviteDelay, setInviteDelay] = useState(DEFAULT_INVITE_DELAY);
   const [batchDelay, setBatchDelay] = useState(DEFAULT_BATCH_DELAY);
-  const [floodWaitDelay, setFloodWaitDelay] = useState(DEFAULT_FLOOD_WAIT_DELAY);
+  
+  // Progress control states
+  const [scrapingStatus, setScrapingStatus] = useState<ScrapingStatus>('idle');
+  const [currentProgress, setCurrentProgress] = useState<ProgressState>({
+    currentAccount: '',
+    currentAccountIndex: 0,
+    totalAccounts: 0,
+    membersAdded: 0,
+    totalTarget: 0,
+    currentLogId: null,
+  });
+  
+  // Use ref to track status for async operations (mutable across function calls)
+  const statusRef = useRef<ScrapingStatus>('idle' as ScrapingStatus);
+  
+  // Sync statusRef when scrapingStatus changes
+  useEffect(() => {
+    statusRef.current = scrapingStatus;
+  }, [scrapingStatus]);
 
   // Fetch accounts based on filter
   const { data: accounts, refetch: refetchAccounts } = useQuery({
@@ -168,43 +195,76 @@ export default function MemberScraping() {
       return;
     }
 
-    setIsScraperRunning(true);
-    toast.info('Üye çekme işlemi başlatılıyor...');
+    setScrapingStatus('running');
+    setCurrentProgress({
+      currentAccount: '',
+      currentAccountIndex: 0,
+      totalAccounts: accounts.length,
+      membersAdded: 0,
+      totalTarget: dailyLimit * accounts.length,
+      currentLogId: null,
+    });
+
+    toast.info('Üye çekme işlemi başlatıldı');
 
     try {
-
-      // Get today's date for checking limits (UTC based - Telegram resets limits at UTC 00:00)
       const today = new Date().toISOString().split('T')[0];
+      let totalAdded = 0;
 
-      for (const account of accounts) {
-        // Check if account has reached daily limit
+      for (let accountIndex = 0; accountIndex < accounts.length; accountIndex++) {
+        // Check if cancelled
+        if (statusRef.current === 'cancelled') {
+          await logToDatabase('cancelled', 'İşlem kullanıcı tarafından iptal edildi', 0);
+          break;
+        }
+
+        const account = accounts[accountIndex];
+        
+        setCurrentProgress(prev => ({
+          ...prev,
+          currentAccount: account.name || account.phone_number,
+          currentAccountIndex: accountIndex + 1,
+        }));
+
+        // Check daily limit
         const { data: limitData } = await supabase
           .from('account_daily_limits')
           .select('members_added_today')
           .eq('account_id', account.id)
           .eq('date', today)
-          .single();
+          .maybeSingle();
 
         if (limitData && limitData.members_added_today >= dailyLimit) {
-          await supabase.from('member_scraping_logs').insert({
-            created_by: user?.id,
-            account_id: account.id,
-            source_group_id: sourceGroupInfo.id,
-            target_group_id: targetGroupInfo.id,
-            source_group_title: sourceGroupInfo.title,
-            target_group_title: targetGroupInfo.title,
-            members_added: 0,
-            status: 'skipped',
-            error_message: `Günlük limit aşıldı (${dailyLimit} üye)`,
-          });
-          
-          toast.warning(`${account.name || account.phone_number} hesabı günlük limitini aştı`);
+          await logToDatabase('skipped', `${account.name || account.phone_number}: Günlük limit aşıldı`, 0, account.id);
           continue;
         }
 
+        let client: TelegramClient | null = null;
+
         try {
-          // Connect to Telegram
-          const client = new TelegramClient(
+          // Create progress log
+          const { data: progressLog } = await supabase
+            .from('member_scraping_logs')
+            .insert({
+              created_by: user?.id,
+              account_id: account.id,
+              source_group_id: sourceGroupInfo.id,
+              target_group_id: targetGroupInfo.id,
+              source_group_title: sourceGroupInfo.title,
+              target_group_title: targetGroupInfo.title,
+              members_added: 0,
+              status: 'in_progress',
+              details: {
+                progress: { current: 0, target: dailyLimit },
+                account_name: account.name || account.phone_number,
+              },
+            })
+            .select()
+            .single();
+
+          setCurrentProgress(prev => ({ ...prev, currentLogId: progressLog?.id || null }));
+
+          client = new TelegramClient(
             new StringSession(account.session_string || ''),
             parseInt(account.telegram_api_credentials.api_id),
             account.telegram_api_credentials.api_hash,
@@ -212,43 +272,41 @@ export default function MemberScraping() {
           );
 
           await client.connect();
-          
-          toast.info(`${account.name || account.phone_number} hesabıyla üye çekimi başlatıldı`);
 
-          // Get members from source group
           const sourceEntity = await client.getEntity(sourceGroupInput);
           const participants = await client.getParticipants(sourceEntity, { limit: 200 });
-
           const targetEntity = await client.getEntity(targetGroupInput);
-          
+
           let addedCount = 0;
           const currentLimit = limitData?.members_added_today || 0;
           const remainingLimit = dailyLimit - currentLimit;
 
-          for (const participant of participants) {
-            if (addedCount >= remainingLimit) {
-              toast.warning(`${account.name || account.phone_number} günlük limitine ulaştı`);
+          for (let i = 0; i < participants.length; i++) {
+            // Check status controls
+            while (statusRef.current === 'paused') {
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+
+            if ((statusRef.current as ScrapingStatus) === 'cancelled') {
               break;
             }
 
+            if (addedCount >= remainingLimit) {
+              break;
+            }
+
+            const participant = participants[i];
+
             try {
-              // Skip bots and deleted accounts
-              if ((participant as any).bot || (participant as any).deleted) {
+              // Skip bots, deleted, restricted
+              if ((participant as any).bot || (participant as any).deleted || (participant as any).restricted) {
                 continue;
               }
 
-              // Skip restricted users
-              if ((participant as any).restricted) {
-                continue;
-              }
-
-              // Check user activity status - only add recently active users
+              // Check activity status
               const status = (participant as any).status;
               if (status) {
                 const statusClass = status.className;
-                // Skip if user hasn't been active recently
-                // Accept: UserStatusOnline, UserStatusRecently (within last few days)
-                // Skip: UserStatusLastWeek, UserStatusLastMonth, UserStatusOffline (long time)
                 if (statusClass === 'UserStatusLastWeek' || 
                     statusClass === 'UserStatusLastMonth' || 
                     statusClass === 'UserStatusOffline') {
@@ -256,7 +314,7 @@ export default function MemberScraping() {
                 }
               }
 
-              // Try to add user to target group using user ID
+              // Add member
               await client.invoke(
                 new Api.channels.InviteToChannel({
                   channel: targetEntity,
@@ -265,35 +323,73 @@ export default function MemberScraping() {
               );
 
               addedCount++;
-              toast.success(`Üye eklendi (${addedCount}/${remainingLimit})`);
+              totalAdded++;
 
-              // Wait based on settings
+              // Update progress in DB
+              if (progressLog?.id) {
+                await supabase
+                  .from('member_scraping_logs')
+                  .update({
+                    members_added: addedCount,
+                    details: {
+                      progress: { current: addedCount, target: remainingLimit },
+                      account_name: account.name || account.phone_number,
+                    },
+                  })
+                  .eq('id', progressLog.id);
+              }
+
+              setCurrentProgress(prev => ({ ...prev, membersAdded: totalAdded }));
+
+              // Smart delays with randomness
               if (addedCount % 5 === 0) {
-                toast.info(`5 üye eklendi, ${batchDelay} saniye bekleniyor...`);
-                await new Promise(resolve => setTimeout(resolve, batchDelay * 1000));
+                const randomBatchDelay = Math.random() * 5 + batchDelay;
+                await new Promise(resolve => setTimeout(resolve, randomBatchDelay * 1000));
               } else {
-                await new Promise(resolve => setTimeout(resolve, inviteDelay * 1000));
+                const randomInviteDelay = Math.random() * 2 + inviteDelay;
+                await new Promise(resolve => setTimeout(resolve, randomInviteDelay * 1000));
               }
             } catch (error: any) {
               console.error('Error adding member:', error);
-              
-              // Check for privacy/permission errors
+
+              // Skip privacy errors silently
               if (error.message?.includes('USER_PRIVACY_RESTRICTED') || 
                   error.message?.includes('USER_NOT_MUTUAL_CONTACT') ||
                   error.message?.includes('USER_CHANNELS_TOO_MUCH')) {
-                // Skip this user silently - privacy settings prevent adding
                 continue;
               }
-              
+
+              // Smart FLOOD handling
               if (error.message?.includes('FLOOD')) {
-                toast.error(`Flood hatası! ${floodWaitDelay} dakika bekleniyor...`);
-                await new Promise(resolve => setTimeout(resolve, floodWaitDelay * 60 * 1000));
+                const waitSeconds = error.seconds || 300;
+                
+                // Log flood wait
+                await supabase
+                  .from('member_scraping_logs')
+                  .insert({
+                    created_by: user?.id,
+                    account_id: account.id,
+                    source_group_id: sourceGroupInfo.id,
+                    target_group_id: targetGroupInfo.id,
+                    source_group_title: sourceGroupInfo.title,
+                    target_group_title: targetGroupInfo.title,
+                    members_added: addedCount,
+                    status: 'flood_wait',
+                    error_message: `Flood hatası! ${waitSeconds} saniye beklenecek`,
+                    details: {
+                      wait_seconds: waitSeconds,
+                      account_name: account.name || account.phone_number,
+                    },
+                  });
+
+                // Skip this account and continue with next
                 break;
               }
             }
           }
 
           await client.disconnect();
+          client = null;
 
           // Update daily limit
           await supabase.from('account_daily_limits').upsert({
@@ -303,57 +399,97 @@ export default function MemberScraping() {
             last_used_at: new Date().toISOString(),
           });
 
-          // Log the operation
-          await supabase.from('member_scraping_logs').insert({
-            created_by: user?.id,
-            account_id: account.id,
-            source_group_id: sourceGroupInfo.id,
-            target_group_id: targetGroupInfo.id,
-            source_group_title: sourceGroupInfo.title,
-            target_group_title: targetGroupInfo.title,
-            members_added: addedCount,
-            status: 'success',
-          });
-
-          if (addedCount < remainingLimit) {
-            toast.info('Tüm uygun üyeler eklendi veya limit doldu');
-            break;
+          // Update final log
+          if (progressLog?.id) {
+            await supabase
+              .from('member_scraping_logs')
+              .update({
+                status: (statusRef.current as ScrapingStatus) === 'cancelled' ? 'cancelled' : 'success',
+                members_added: addedCount,
+              })
+              .eq('id', progressLog.id);
           }
         } catch (error: any) {
           console.error('Account error:', error);
           
-          await supabase.from('member_scraping_logs').insert({
-            created_by: user?.id,
-            account_id: account.id,
-            source_group_id: sourceGroupInfo.id,
-            target_group_id: targetGroupInfo.id,
-            source_group_title: sourceGroupInfo.title,
-            target_group_title: targetGroupInfo.title,
-            members_added: 0,
-            status: 'error',
-            error_message: error.message || 'Bilinmeyen hata',
-          });
+          if (client) {
+            try {
+              await client.disconnect();
+            } catch (e) {
+              console.error('Error disconnecting:', e);
+            }
+          }
+
+          await logToDatabase('error', error.message || 'Bilinmeyen hata', 0, account.id);
         }
       }
 
-      toast.success('Üye çekme işlemi tamamlandı');
-      refetchLogs();
+      if (statusRef.current !== 'cancelled') {
+        toast.success(`Üye çekme işlemi tamamlandı. Toplam ${totalAdded} üye eklendi.`);
+      }
     } catch (error: any) {
       console.error('Scraping error:', error);
-      toast.error('İşlem sırasında hata oluştu: ' + error.message);
+      await logToDatabase('error', error.message || 'Bilinmeyen hata', 0);
     } finally {
-      setIsScraperRunning(false);
+      setScrapingStatus('idle');
+      setCurrentProgress({
+        currentAccount: '',
+        currentAccountIndex: 0,
+        totalAccounts: 0,
+        membersAdded: 0,
+        totalTarget: 0,
+        currentLogId: null,
+      });
+      refetchLogs();
     }
+  };
+
+  const logToDatabase = async (status: string, message: string, membersAdded: number, accountId?: string) => {
+    await supabase.from('member_scraping_logs').insert({
+      created_by: user?.id,
+      account_id: accountId || null,
+      source_group_id: sourceGroupInfo?.id || null,
+      target_group_id: targetGroupInfo?.id || null,
+      source_group_title: sourceGroupInfo?.title || null,
+      target_group_title: targetGroupInfo?.title || null,
+      members_added: membersAdded,
+      status,
+      error_message: status === 'error' ? message : null,
+      details: { message },
+    });
+  };
+
+  const handlePauseScraping = () => {
+    setScrapingStatus('paused');
+    toast.info('İşlem duraklatıldı');
+  };
+
+  const handleResumeScraping = () => {
+    setScrapingStatus('running');
+    toast.info('İşlem devam ediyor');
+  };
+
+  const handleCancelScraping = () => {
+    setScrapingStatus('cancelled');
+    toast.warning('İşlem iptal ediliyor...');
   };
 
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'success':
-        return <Badge variant="default">Başarılı</Badge>;
+        return <Badge variant="default" className="bg-success">Başarılı</Badge>;
       case 'error':
         return <Badge variant="destructive">Hata</Badge>;
       case 'skipped':
         return <Badge variant="secondary">Atlandı</Badge>;
+      case 'in_progress':
+        return <Badge variant="outline" className="bg-blue-500/10 text-blue-600 border-blue-500/20">Devam Ediyor</Badge>;
+      case 'paused':
+        return <Badge variant="outline" className="bg-yellow-500/10 text-yellow-600 border-yellow-500/20">Duraklatıldı</Badge>;
+      case 'cancelled':
+        return <Badge variant="outline" className="bg-gray-500/10 text-gray-600 border-gray-500/20">İptal Edildi</Badge>;
+      case 'flood_wait':
+        return <Badge variant="outline" className="bg-orange-500/10 text-orange-600 border-orange-500/20">Flood Bekliyor</Badge>;
       default:
         return <Badge variant="outline">{status}</Badge>;
     }
@@ -507,44 +643,98 @@ export default function MemberScraping() {
                       value={batchDelay}
                       onChange={(e) => setBatchDelay(Number(e.target.value))}
                     />
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="flood-delay">FLOOD Sonrası Bekleme (dakika)</Label>
-                    <Input
-                      id="flood-delay"
-                      type="number"
-                      min="1"
-                      max="60"
-                      value={floodWaitDelay}
-                      onChange={(e) => setFloodWaitDelay(Number(e.target.value))}
-                    />
+                    <p className="text-xs text-muted-foreground">
+                      Flood riskini azaltmak için her 5 üye sonrası otomatik bekleme
+                    </p>
                   </div>
                 </div>
 
                 <Button
                   onClick={handleStartScraping} 
-                  disabled={isScraperRunning || !sourceGroupInfo || !targetGroupInfo}
+                  disabled={scrapingStatus !== 'idle' || !sourceGroupInfo || !targetGroupInfo}
                   className="w-full"
                 >
-                  {isScraperRunning ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      İşlem Devam Ediyor...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="mr-2 h-4 w-4" />
-                      Üye Çekmeyi Başlat
-                    </>
-                  )}
+                  <Play className="mr-2 h-4 w-4" />
+                  Üye Çekmeyi Başlat
                 </Button>
               </CardContent>
             </Card>
           </div>
 
-          {/* Right Panel - Logs */}
-          <div className="lg:col-span-2">
+          {/* Right Panel - Progress & Logs */}
+          <div className="lg:col-span-2 space-y-4">
+            {/* Progress Card */}
+            {scrapingStatus !== 'idle' && (
+              <Card>
+                <CardHeader>
+                  <CardTitle>İşlem Durumu</CardTitle>
+                  <CardDescription>
+                    Üye çekme işlemi canlı takip
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-4">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">İlerleme</span>
+                      <span className="font-medium">
+                        {currentProgress.membersAdded} / {currentProgress.totalTarget} üye
+                      </span>
+                    </div>
+                    <Progress 
+                      value={(currentProgress.membersAdded / currentProgress.totalTarget) * 100} 
+                      className="h-2"
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <p className="text-muted-foreground">Şu Anki Hesap</p>
+                      <p className="font-medium">{currentProgress.currentAccount || '-'}</p>
+                    </div>
+                    <div>
+                      <p className="text-muted-foreground">Hesap İlerlemesi</p>
+                      <p className="font-medium">
+                        {currentProgress.currentAccountIndex} / {currentProgress.totalAccounts}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2 pt-2">
+                    {scrapingStatus === 'running' && (
+                      <Button
+                        onClick={handlePauseScraping}
+                        variant="outline"
+                        className="flex-1"
+                      >
+                        <Pause className="mr-2 h-4 w-4" />
+                        Duraklat
+                      </Button>
+                    )}
+                    {scrapingStatus === 'paused' && (
+                      <Button
+                        onClick={handleResumeScraping}
+                        variant="outline"
+                        className="flex-1"
+                      >
+                        <Play className="mr-2 h-4 w-4" />
+                        Devam Et
+                      </Button>
+                    )}
+                    <Button
+                      onClick={handleCancelScraping}
+                      variant="destructive"
+                      className="flex-1"
+                      disabled={scrapingStatus === 'cancelled'}
+                    >
+                      <StopCircle className="mr-2 h-4 w-4" />
+                      İptal Et
+                    </Button>
+                  </div>
+                </CardContent>
+              </Card>
+            )}
+
+            {/* Logs Card */}
             <Card>
               <CardHeader>
                 <div className="flex items-center justify-between">
@@ -566,7 +756,7 @@ export default function MemberScraping() {
                 </div>
               </CardHeader>
               <CardContent>
-                <ScrollArea className="h-[600px] w-full pr-4">
+                <ScrollArea className="h-[500px] w-full pr-4">
                   {logs && logs.length > 0 ? (
                     <div className="space-y-3">
                       {logs.map((log) => (
@@ -576,11 +766,16 @@ export default function MemberScraping() {
                         >
                           <div className="flex items-start justify-between gap-4">
                             <div className="flex-1 space-y-1">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 {getStatusBadge(log.status)}
                                 <span className="text-sm font-medium">
                                   {log.members_added} üye eklendi
                                 </span>
+                                {(log.details as any)?.account_name && (
+                                  <span className="text-xs text-muted-foreground">
+                                    ({(log.details as any).account_name})
+                                  </span>
+                                )}
                               </div>
                               <div className="text-sm text-muted-foreground">
                                 <div><strong>Kaynak:</strong> {log.source_group_title}</div>
@@ -589,6 +784,11 @@ export default function MemberScraping() {
                               {log.error_message && (
                                 <p className="text-sm text-destructive mt-2">
                                   {log.error_message}
+                                </p>
+                              )}
+                              {(log.details as any)?.wait_seconds && (
+                                <p className="text-sm text-orange-600 mt-2">
+                                  Bekleme süresi: {(log.details as any).wait_seconds} saniye
                                 </p>
                               )}
                             </div>
