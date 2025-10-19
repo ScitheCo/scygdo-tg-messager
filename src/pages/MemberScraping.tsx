@@ -213,6 +213,25 @@ export default function MemberScraping() {
                 continue;
               }
 
+              // Skip restricted users
+              if ((participant as any).restricted) {
+                continue;
+              }
+
+              // Check user activity status - only add recently active users
+              const status = (participant as any).status;
+              if (status) {
+                const statusClass = status.className;
+                // Skip if user hasn't been active recently
+                // Accept: UserStatusOnline, UserStatusRecently (within last few days)
+                // Skip: UserStatusLastWeek, UserStatusLastMonth, UserStatusOffline (long time)
+                if (statusClass === 'UserStatusLastWeek' || 
+                    statusClass === 'UserStatusLastMonth' || 
+                    statusClass === 'UserStatusOffline') {
+                  continue;
+                }
+              }
+
               // Try to add user to target group using user ID
               await client.invoke(
                 new Api.channels.InviteToChannel({
@@ -233,6 +252,14 @@ export default function MemberScraping() {
               }
             } catch (error: any) {
               console.error('Error adding member:', error);
+              
+              // Check for privacy/permission errors
+              if (error.message?.includes('USER_PRIVACY_RESTRICTED') || 
+                  error.message?.includes('USER_NOT_MUTUAL_CONTACT') ||
+                  error.message?.includes('USER_CHANNELS_TOO_MUCH')) {
+                // Skip this user silently - privacy settings prevent adding
+                continue;
+              }
               
               if (error.message?.includes('FLOOD')) {
                 toast.error(`Flood hatası! ${floodWaitDelay} dakika bekleniyor...`);
