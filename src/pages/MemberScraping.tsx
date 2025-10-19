@@ -266,12 +266,37 @@ export default function MemberScraping() {
         account: any;
         client: TelegramClient | null;
         sourceMembers: any[];
-        targetMemberIds: Set<string>;
         memberIndex: number;
         todayAdded: number;
         isFloodWaiting: boolean;
         floodWaitUntil: number;
       }> = [];
+
+      // GLOBAL target member IDs - shared across ALL accounts to prevent duplicates
+      let globalTargetMemberIds = new Set<string>();
+      
+      // Initialize global target member IDs using first account
+      try {
+        const firstAccount = accounts[0];
+        const firstClient = new TelegramClient(
+          new StringSession(firstAccount.session_string || ''),
+          parseInt(firstAccount.telegram_api_credentials.api_id),
+          firstAccount.telegram_api_credentials.api_hash,
+          { connectionRetries: 5 }
+        );
+        await firstClient.connect();
+        const targetEntity = await firstClient.getEntity(targetGroupInput);
+        const targetParticipants = await firstClient.getParticipants(targetEntity, { limit: 5000 });
+        globalTargetMemberIds = new Set(targetParticipants.map(p => String(p.id)));
+        await firstClient.disconnect();
+        
+        await logToDatabase('info', `Hedef grupta mevcut ${globalTargetMemberIds.size} üye tespit edildi`, 0);
+        console.log(`🎯 Global target member IDs initialized: ${globalTargetMemberIds.size} existing members`);
+      } catch (error: any) {
+        console.error('Error initializing global target IDs:', error);
+        await logToDatabase('error', `Hedef grup üyeleri alınamadı: ${error.message}`, 0);
+        throw error;
+      }
 
       // Fetch members for each account
       for (const account of accounts) {
@@ -291,11 +316,6 @@ export default function MemberScraping() {
           const sourceEntity = await client.getEntity(sourceGroupInput);
           const sourceParticipants = await client.getParticipants(sourceEntity, { limit: 500 });
 
-          // Get target group members (to check if already exists)
-          const targetEntity = await client.getEntity(targetGroupInput);
-          const targetParticipants = await client.getParticipants(targetEntity, { limit: 1000 });
-          const targetMemberIds = new Set(targetParticipants.map(p => String(p.id)));
-
           // Check today's limit
           const { data: limitData } = await supabase
             .from('account_daily_limits')
@@ -310,7 +330,6 @@ export default function MemberScraping() {
             account,
             client,
             sourceMembers: sourceParticipants,
-            targetMemberIds,
             memberIndex: 0,
             todayAdded,
             isFloodWaiting: false,
@@ -332,7 +351,7 @@ export default function MemberScraping() {
                 phase: 'members_fetched',
                 account_name: account.name || account.phone_number,
                 source_count: sourceParticipants.length,
-                target_count: targetParticipants.length,
+                target_count: globalTargetMemberIds.size,
               },
             });
         } catch (error: any) {
@@ -362,7 +381,7 @@ export default function MemberScraping() {
         }
 
         const accountData = accountMembersData[currentAccountIndex];
-        const { account, client, sourceMembers, targetMemberIds, memberIndex, todayAdded, isFloodWaiting, floodWaitUntil } = accountData;
+        const { account, client, sourceMembers, memberIndex, todayAdded, isFloodWaiting, floodWaitUntil } = accountData;
 
         // Update progress UI
         setCurrentProgress({
@@ -414,8 +433,10 @@ export default function MemberScraping() {
           continue;
         }
 
-        // Skip if already in target group
-        if (targetMemberIds.has(String(member.id))) {
+        // Skip if already in target group (check global Set)
+        const memberId = String(member.id);
+        if (globalTargetMemberIds.has(memberId)) {
+          console.log(`⏭️ Skipping ${memberId} - already in target group`);
           currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
           continue;
         }
@@ -469,6 +490,10 @@ export default function MemberScraping() {
             totalAdded++;
             accountData.todayAdded++;
             consecutiveSkips = 0;
+            
+            // Add member ID to global Set to prevent duplicate additions
+            globalTargetMemberIds.add(memberId);
+            console.log(`✅ Added ${memberId} - Global target now has ${globalTargetMemberIds.size} members`);
             
             // Add to successfully added list
             successfullyAddedMembers.push({
@@ -537,7 +562,7 @@ export default function MemberScraping() {
             if (totalAdded % 10 === 0 && totalAdded > 0) {
               try {
                 const targetEntity = await client.getEntity(targetGroupInput);
-                const currentTargetMembers = await client.getParticipants(targetEntity, { limit: 1000 });
+                const currentTargetMembers = await client.getParticipants(targetEntity, { limit: 5000 });
                 const targetIds = new Set(currentTargetMembers.map(p => String(p.id)));
                 
                 const verifiedCount = successfullyAddedMembers.filter(m => 
