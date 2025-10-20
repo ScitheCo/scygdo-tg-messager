@@ -238,27 +238,48 @@ export default function MemberScraping() {
     return allMemberIds;
   };
 
-  // Helper: Check if user is participant in target group
-  const getParticipantInTarget = async (client: TelegramClient, userId: any, targetInput: string): Promise<boolean> => {
+  // Helper: Enhanced participant check with detailed status
+  const getParticipantInTargetEnhanced = async (
+    client: TelegramClient, 
+    userId: any, 
+    targetEntityOrId: any
+  ): Promise<{ isMember: boolean; raw?: any }> => {
     try {
-      const targetEntity = await client.getEntity(targetInput);
+      const targetEntity = typeof targetEntityOrId === 'string' 
+        ? await client.getEntity(targetEntityOrId)
+        : targetEntityOrId;
       const userEntity = await client.getInputEntity(userId);
       
-      await client.invoke(
+      const result = await client.invoke(
         new Api.channels.GetParticipant({
           channel: targetEntity,
           participant: userEntity,
         })
       );
       
-      // If no error thrown, user is a participant
-      return true;
+      const participant = (result as any).participant;
+      
+      // Check participant type
+      if (participant.className === 'ChannelParticipant' || 
+          participant.className === 'ChannelParticipantAdmin' ||
+          participant.className === 'ChannelParticipantCreator') {
+        return { isMember: true, raw: participant };
+      }
+      
+      // ChannelParticipantBanned or ChannelParticipantLeft
+      if (participant.className === 'ChannelParticipantBanned' || 
+          participant.className === 'ChannelParticipantLeft') {
+        return { isMember: false, raw: participant };
+      }
+      
+      // Default: consider member if no error
+      return { isMember: true, raw: participant };
     } catch (error: any) {
       if (error.message?.includes('USER_NOT_PARTICIPANT')) {
-        return false;
+        return { isMember: false };
       }
-      // Other errors mean we can't determine, assume not participant to be safe
-      return false;
+      // Other errors: assume not member to be safe
+      return { isMember: false };
     }
   };
 
@@ -361,11 +382,67 @@ export default function MemberScraping() {
         throw error;
       }
 
-      // STEP 2: Fetch source members and prepare account data
+      // STEP 2: Build single global candidate queue from first account
+      // Global structures for coordination
+      const globalCandidateQueue: any[] = [];
+      const globalReservedIds = new Set<string>();
+      const globalProcessedIds = new Set<string>();
+      
+      // Fetch source members with first account and build global queue
+      try {
+        const firstAccount = accounts[0];
+        const firstClient = new TelegramClient(
+          new StringSession(firstAccount.session_string || ''),
+          parseInt(firstAccount.telegram_api_credentials.api_id),
+          firstAccount.telegram_api_credentials.api_hash,
+          { connectionRetries: 5 }
+        );
+        await firstClient.connect();
+        
+        await logToDatabase('info', 'Kaynak grup üyeleri alınıyor...', 0);
+        const sourceEntity = await firstClient.getEntity(sourceGroupInfo.id);
+        const sourceParticipants = await firstClient.getParticipants(sourceEntity, { limit: 2000 });
+        
+        // Pre-filter and deduplicate
+        const seenIds = new Set<string>();
+        for (const member of sourceParticipants) {
+          const memberId = String(member.id);
+          
+          // Skip if already seen (dedup)
+          if (seenIds.has(memberId)) continue;
+          seenIds.add(memberId);
+          
+          // Skip bots, deleted, restricted
+          if ((member as any).bot || (member as any).deleted || (member as any).restricted) continue;
+          
+          // Skip empty status
+          const status = (member as any).status;
+          if (status?.className === 'UserStatusEmpty') continue;
+          
+          // Skip if already in target
+          if (globalTargetMemberIds.has(memberId)) continue;
+          
+          globalCandidateQueue.push(member);
+        }
+        
+        await firstClient.disconnect();
+        await logToDatabase('info', `✅ Global aday kuyruğu hazırlandı: ${globalCandidateQueue.length} aday`, 0);
+        console.log(`📋 Global candidate queue: ${globalCandidateQueue.length} candidates`);
+      } catch (error: any) {
+        console.error('Error building candidate queue:', error);
+        await logToDatabase('error', `Aday kuyruğu oluşturulamadı: ${error.message}`, 0);
+        throw error;
+      }
+      
+      if (globalCandidateQueue.length === 0) {
+        toast.warning('Kaynak grupta eklenebilecek yeni üye bulunamadı');
+        throw new Error('Aday bulunamadı');
+      }
+
+      // STEP 3: Prepare account data structures
       const accountMembersData: Array<{
         account: any;
         client: TelegramClient | null;
-        candidateQueue: any[]; // Pre-filtered candidates
         todayAdded: number;
         successCountThisSession: number;
         attemptsThisSession: number;
@@ -387,27 +464,12 @@ export default function MemberScraping() {
 
           await client.connect();
 
-          // Get source group members with higher limit
-          const sourceEntity = await client.getEntity(sourceGroupInput);
-          const sourceParticipants = await client.getParticipants(sourceEntity, { limit: 2000 });
-
-          // Pre-filter: remove bots, deleted, restricted, already in target
-          const candidateQueue = sourceParticipants.filter(member => {
-            if ((member as any).bot || (member as any).deleted || (member as any).restricted) return false;
-            const status = (member as any).status;
-            if (status?.className === 'UserStatusEmpty') return false;
-            const memberId = String(member.id);
-            if (globalTargetMemberIds.has(memberId)) return false;
-            return true;
-          });
-
           const todayAdded = limitsMap.get(account.id) || 0;
           const targetSuccess = Math.max(0, dailyLimit - todayAdded);
 
           accountMembersData.push({
             account,
             client,
-            candidateQueue,
             todayAdded,
             successCountThisSession: 0,
             attemptsThisSession: 0,
@@ -428,7 +490,7 @@ export default function MemberScraping() {
             details: {
               phase: 'prepared',
               account_name: account.name || account.phone_number,
-              candidates_count: candidateQueue.length,
+              global_queue_size: globalCandidateQueue.length,
               target_success: targetSuccess,
               today_added: todayAdded,
             },
@@ -443,7 +505,7 @@ export default function MemberScraping() {
         throw new Error('Hiçbir hesap hazırlanamadı');
       }
 
-      // STEP 3: Round-robin with proper termination criteria
+      // STEP 4: Round-robin with global queue consumption
       let currentAccountIndex = 0;
       let allAccountsFinished = false;
 
@@ -458,20 +520,26 @@ export default function MemberScraping() {
           await new Promise(resolve => setTimeout(resolve, 1000));
         }
 
+        // Check if global queue is exhausted
+        if (globalCandidateQueue.length === 0) {
+          await logToDatabase('info', 'Global aday kuyruğu tükendi', totalAdded);
+          allAccountsFinished = true;
+          break;
+        }
+
         // Find next available account
         let attempts = 0;
         let foundAccount = false;
         
         while (attempts < accountMembersData.length) {
           const accountData = accountMembersData[currentAccountIndex];
-          const { account, client, candidateQueue, successCountThisSession, targetSuccess, isFloodWaiting, floodWaitUntil } = accountData;
+          const { successCountThisSession, targetSuccess, isFloodWaiting, floodWaitUntil } = accountData;
 
           // Check if account can continue
           const reachedTarget = successCountThisSession >= targetSuccess;
-          const noMoreCandidates = candidateQueue.length === 0;
           const inFloodWait = isFloodWaiting && Date.now() < floodWaitUntil;
 
-          if (!reachedTarget && !noMoreCandidates && !inFloodWait) {
+          if (!reachedTarget && !inFloodWait) {
             foundAccount = true;
             break;
           }
@@ -486,13 +554,13 @@ export default function MemberScraping() {
         }
 
         if (!foundAccount) {
-          // All accounts finished
+          // All accounts finished their targets
           allAccountsFinished = true;
           break;
         }
 
         const accountData = accountMembersData[currentAccountIndex];
-        const { account, client, candidateQueue } = accountData;
+        const { account, client } = accountData;
 
         // Update progress UI
         setCurrentProgress({
@@ -504,21 +572,34 @@ export default function MemberScraping() {
           currentLogId: mainLog?.id || null,
         });
 
-        // Get next candidate
-        const member = candidateQueue.shift();
+        // Get next candidate from GLOBAL queue
+        const member = globalCandidateQueue.shift();
         if (!member) {
-          currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
-          continue;
+          // Queue exhausted
+          allAccountsFinished = true;
+          break;
         }
 
         const memberId = String(member.id);
 
-        // Double-check: verify user is NOT already in target (definitive check)
+        // Check if already processed or reserved
+        if (globalProcessedIds.has(memberId) || globalReservedIds.has(memberId)) {
+          continue;
+        }
+
+        // Reserve this member
+        globalReservedIds.add(memberId);
+
+        // Enhanced pre-invite verification
         if (client) {
           try {
-            const isAlreadyMember = await getParticipantInTarget(client, member.id, targetGroupInput);
-            if (isAlreadyMember) {
-              console.log(`⏭️ Pre-invite check: ${memberId} already in target, skipping`);
+            const targetEntity = await client.getInputEntity(sourceGroupInfo.id);
+            const checkResult = await getParticipantInTargetEnhanced(client, member.id, targetEntity);
+            
+            if (checkResult.isMember) {
+              console.log(`⏭️ Pre-invite check: ${memberId} already in target (enhanced), skipping`);
+              globalProcessedIds.add(memberId);
+              globalReservedIds.delete(memberId);
               currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
               continue;
             }
@@ -533,7 +614,7 @@ export default function MemberScraping() {
             totalAttempts++;
             accountData.attemptsThisSession++;
             
-            const targetEntity = await client.getEntity(targetGroupInput);
+            const targetEntity = await client.getInputEntity(targetGroupInfo.id);
             const userEntity = await client.getInputEntity(member.id);
             
             // Invoke InviteToChannel
@@ -544,14 +625,54 @@ export default function MemberScraping() {
               })
             );
 
-            // If no error thrown, consider it success
+            // Wait briefly before post-verify
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            
+            // POST-VERIFY: Check if member is actually now in target
+            let postVerifySuccess = false;
+            try {
+              const postCheckResult = await getParticipantInTargetEnhanced(client, member.id, targetEntity);
+              postVerifySuccess = postCheckResult.isMember;
+            } catch (error: any) {
+              console.error('Post-verify error:', error);
+              // Assume success if we can't verify
+              postVerifySuccess = true;
+            }
+            
+            if (!postVerifySuccess) {
+              // Failed post-verify - don't count as success
+              console.log(`❌ Post-verify failed for ${memberId}, skipping success count`);
+              globalProcessedIds.add(memberId);
+              globalReservedIds.delete(memberId);
+              
+              await supabase.from('member_scraping_logs').insert({
+                created_by: user?.id,
+                account_id: account.id,
+                source_group_id: sourceGroupInfo.id,
+                target_group_id: targetGroupInfo.id,
+                source_group_title: sourceGroupInfo.title,
+                target_group_title: targetGroupInfo.title,
+                members_added: 0,
+                status: 'skipped',
+                error_message: 'Post-verify başarısız: üye eklenmedi',
+                details: { member_id: memberId, reason: 'post_verify_failed' },
+              });
+              
+              currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+              continue;
+            }
+            
+            // Post-verify SUCCESS - count it
             totalAdded++;
             accountData.successCountThisSession++;
             accountData.todayAdded++;
             
-            // Update global set immediately
+            // Mark as processed
+            globalProcessedIds.add(memberId);
+            globalReservedIds.delete(memberId);
             globalTargetMemberIds.add(memberId);
-            console.log(`✅ Successfully added ${memberId} via ${account.name}`);
+            
+            console.log(`✅ Post-verified: ${memberId} successfully added via ${account.name}`);
             
             // Add to success list
             successfullyAddedMembers.push({
@@ -626,6 +747,10 @@ export default function MemberScraping() {
             }
           } catch (error: any) {
             console.error('Error adding member:', error);
+            
+            // Mark as processed regardless
+            globalProcessedIds.add(memberId);
+            globalReservedIds.delete(memberId);
 
             // Handle specific errors
             if (error.message?.includes('USER_ALREADY_PARTICIPANT')) {
@@ -663,7 +788,7 @@ export default function MemberScraping() {
                 members_added: 0,
                 status: 'skipped',
                 error_message: error.message,
-                details: { member_id: memberId },
+                details: { member_id: memberId, reason: 'privacy_restriction' },
               });
               currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
               continue;
@@ -770,7 +895,13 @@ export default function MemberScraping() {
           accountStats,
         });
         
-        toast.success(`✅ ${totalAdded} üye başarıyla eklendi!`);
+        // Check if target was reached
+        const targetReached = totalAdded >= totalTargetSuccess;
+        if (targetReached) {
+          toast.success(`✅ ${totalAdded} üye başarıyla eklendi! Hedef tamamlandı.`);
+        } else {
+          toast.warning(`⚠️ ${totalAdded} üye eklendi. Hedef: ${totalTargetSuccess}. Aday kuyruğu tükendi veya limitler doldu.`);
+        }
       }
     } catch (error: any) {
       console.error('Scraping error:', error);
@@ -887,10 +1018,17 @@ export default function MemberScraping() {
       }>
         <DialogContent className="max-w-2xl max-h-[80vh] overflow-hidden flex flex-col">
           <DialogHeader>
-            <DialogTitle>✅ Üye Çekme İşlemi Tamamlandı</DialogTitle>
+            <DialogTitle>
+              {completedScraping.successCount >= currentProgress.totalTarget ? '✅' : '⚠️'} Üye Çekme İşlemi Tamamlandı
+            </DialogTitle>
             <DialogDescription>
               Toplam {completedScraping.totalAttempts} deneme yapıldı, 
               {completedScraping.successCount} üye başarıyla eklendi.
+              {completedScraping.successCount < currentProgress.totalTarget && (
+                <span className="block mt-1 text-yellow-600 dark:text-yellow-400">
+                  Hedef limitine ulaşılamadı: Global aday kuyruğu tükendi veya hesap limitleri doldu.
+                </span>
+              )}
             </DialogDescription>
           </DialogHeader>
           
