@@ -305,6 +305,46 @@ export default function MemberScraping() {
     }
   };
 
+  // Helper: Ensure entity is in client's cache
+  const ensureEntityInCache = async (
+    client: TelegramClient,
+    candidate: any
+  ): Promise<boolean> => {
+    try {
+      // Priority 1: Try username (most reliable)
+      if (candidate.username) {
+        try {
+          await client.getEntity(candidate.username);
+          return true;
+        } catch (error: any) {
+          console.error(`getEntity with username failed for @${candidate.username}:`, error.message);
+        }
+      }
+      
+      // Priority 2: Try GetUsers API with InputUser (requires accessHash)
+      if (candidate.accessHash || candidate.access_hash) {
+        try {
+          const accessHash = candidate.accessHash ?? candidate.access_hash;
+          const inputUser = new Api.InputUser({
+            userId: candidate.id,
+            accessHash: accessHash
+          });
+          const result = await client.invoke(
+            new Api.users.GetUsers({ id: [inputUser] })
+          );
+          return result && result.length > 0;
+        } catch (error: any) {
+          console.error(`GetUsers API failed for ${candidate.id}:`, error.message);
+        }
+      }
+      
+      return false;
+    } catch (error: any) {
+      console.error('ensureEntityInCache error:', error.message);
+      return false;
+    }
+  };
+
   // Helper: Resolve target channel with username/accessHash priority
   const resolveTargetChannel = async (
     client: TelegramClient,
@@ -712,6 +752,9 @@ export default function MemberScraping() {
         // Enhanced pre-invite verification
         if (client) {
           try {
+            // CACHE THE ENTITY FIRST
+            await ensureEntityInCache(client, member);
+            
             const checkResult = await getParticipantInTargetEnhanced(client, member, targetGroupInfo);
             
             if (checkResult.isMember) {
@@ -732,6 +775,9 @@ export default function MemberScraping() {
           try {
             totalAttempts++;
             accountData.attemptsThisSession++;
+            
+            // CACHE THE ENTITY FIRST
+            await ensureEntityInCache(client, member);
             
             // Resolve target channel
             const targetInputChannel = await resolveTargetChannel(client, targetGroupInfo);
