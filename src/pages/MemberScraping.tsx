@@ -258,47 +258,49 @@ export default function MemberScraping() {
   // Helper: Enhanced participant check with detailed status
   const getParticipantInTargetEnhanced = async (
     client: TelegramClient, 
-    userId: any, 
+    userRef: any, 
     targetGroupIdOrInput: any
   ): Promise<{ isMember: boolean; raw?: any }> => {
     try {
-      // Get proper entities
+      // Resolve channel
       const targetEntity = await client.getEntity(targetGroupIdOrInput);
       const targetInputChannel = await client.getInputEntity(targetEntity);
-      
-      // Get user input entity
-      let userInputEntity;
+
+      // Resolve user input peer - prefer direct InputUser if we have accessHash
+      let userInputEntity: any;
       try {
-        userInputEntity = await client.getInputEntity(userId);
+        const u: any = userRef;
+        if (u && (u.accessHash || u.access_hash)) {
+          const accessHash = u.accessHash ?? u.access_hash;
+          userInputEntity = new Api.InputUser({ userId: u.id, accessHash });
+        } else {
+          userInputEntity = await client.getInputEntity(u?.id ?? userRef);
+        }
       } catch (error: any) {
-        // If we can't get the user entity, they're probably not accessible
-        console.error(`Cannot get user entity for ${userId}:`, error.message);
+        console.error(`Cannot get user input entity for ${JSON.stringify({ id: (userRef as any)?.id ?? userRef })}:`, error.message);
         return { isMember: false };
       }
-      
+
       const result = await client.invoke(
         new Api.channels.GetParticipant({
           channel: targetInputChannel,
           participant: userInputEntity,
         })
       );
-      
+
       const participant = (result as any).participant;
-      
-      // Check participant type - only these are ACTIVE members
+
       if (participant.className === 'ChannelParticipant' || 
           participant.className === 'ChannelParticipantAdmin' ||
           participant.className === 'ChannelParticipantCreator') {
         return { isMember: true, raw: participant };
       }
-      
-      // ChannelParticipantBanned with left=true or ChannelParticipantLeft means NOT a member
+
       if (participant.className === 'ChannelParticipantBanned' || 
           participant.className === 'ChannelParticipantLeft') {
         return { isMember: false, raw: participant };
       }
-      
-      // Default: if we got a result without error, consider as member
+
       return { isMember: true, raw: participant };
     } catch (error: any) {
       if (error.message?.includes('USER_NOT_PARTICIPANT')) {
@@ -308,7 +310,6 @@ export default function MemberScraping() {
         console.error('Invalid channel access:', error.message);
         return { isMember: false };
       }
-      // For other errors (timeout, network issues), be conservative
       console.error('getParticipantInTargetEnhanced error:', error.message);
       return { isMember: false };
     }
@@ -625,7 +626,7 @@ export default function MemberScraping() {
         if (client) {
           try {
             // Use targetGroupInfo.id, NOT sourceGroupInfo.id!
-            const checkResult = await getParticipantInTargetEnhanced(client, member.id, targetGroupInfo.id);
+            const checkResult = await getParticipantInTargetEnhanced(client, member as any, targetGroupInfo.id);
             
             if (checkResult.isMember) {
               console.log(`⏭️ Pre-invite check: ${memberId} already in target (enhanced), skipping`);
@@ -652,7 +653,13 @@ export default function MemberScraping() {
             
             let userInputEntity;
             try {
-              userInputEntity = await client.getInputEntity(member.id);
+              const m: any = member;
+              if (m && (m.accessHash || m.access_hash)) {
+                const accessHash = m.accessHash ?? m.access_hash;
+                userInputEntity = new Api.InputUser({ userId: m.id, accessHash });
+              } else {
+                userInputEntity = await client.getInputEntity(member.id);
+              }
             } catch (error: any) {
               console.error(`Cannot resolve user entity for ${memberId}:`, error.message);
               globalProcessedIds.add(memberId);
@@ -689,7 +696,7 @@ export default function MemberScraping() {
             // POST-VERIFY: Check if member is actually now in target
             let postVerifySuccess = false;
             try {
-              const postCheckResult = await getParticipantInTargetEnhanced(client, member.id, targetGroupInfo.id);
+              const postCheckResult = await getParticipantInTargetEnhanced(client, member as any, targetGroupInfo.id);
               postVerifySuccess = postCheckResult.isMember;
             } catch (error: any) {
               console.error('Post-verify error:', error);
