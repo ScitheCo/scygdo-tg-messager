@@ -152,6 +152,7 @@ export default function MemberScraping() {
         id: String(entity.id),
         title: (entity as any).title || input,
         username: (entity as any).username || null,
+        accessHash: (entity as any).accessHash || null,
       };
 
       setGroupInfo(groupInfo);
@@ -255,36 +256,120 @@ export default function MemberScraping() {
     return allMemberIds;
   };
 
+  // Helper: Resolve user entity with accessHash priority
+  const resolveUserEntity = async (
+    client: TelegramClient,
+    candidate: any
+  ): Promise<{ inputPeerUser: any; inputUser: any } | null> => {
+    try {
+      const c: any = candidate;
+      
+      // Priority 1: Use accessHash if available
+      if (c && (c.accessHash || c.access_hash)) {
+        const accessHash = c.accessHash ?? c.access_hash;
+        const userId = c.id;
+        return {
+          inputPeerUser: new Api.InputPeerUser({ userId, accessHash }),
+          inputUser: new Api.InputUser({ userId, accessHash }),
+        };
+      }
+      
+      // Priority 2: Try username resolution
+      if (c && c.username) {
+        try {
+          const resolved = await client.invoke(
+            new Api.contacts.ResolveUsername({ username: c.username })
+          );
+          const users = (resolved as any).users;
+          if (users && users.length > 0) {
+            const user = users[0];
+            const userId = user.id;
+            const accessHash = user.accessHash || user.access_hash;
+            if (accessHash) {
+              return {
+                inputPeerUser: new Api.InputPeerUser({ userId, accessHash }),
+                inputUser: new Api.InputUser({ userId, accessHash }),
+              };
+            }
+          }
+        } catch (error: any) {
+          console.error(`Username resolution failed for @${c.username}:`, error.message);
+        }
+      }
+      
+      // Priority 3: Try getInputEntity as last resort
+      try {
+        const inputEntity = await client.getInputEntity(c.id);
+        if (inputEntity.className === 'InputPeerUser') {
+          return {
+            inputPeerUser: inputEntity,
+            inputUser: new Api.InputUser({ 
+              userId: (inputEntity as any).userId, 
+              accessHash: (inputEntity as any).accessHash 
+            }),
+          };
+        }
+      } catch (error: any) {
+        console.error(`getInputEntity failed for ${c.id}:`, error.message);
+      }
+      
+      return null;
+    } catch (error: any) {
+      console.error('resolveUserEntity error:', error.message);
+      return null;
+    }
+  };
+
+  // Helper: Resolve target channel with username/accessHash priority
+  const resolveTargetChannel = async (
+    client: TelegramClient,
+    groupInfo: any
+  ): Promise<any> => {
+    try {
+      // Priority 1: Use username if available
+      if (groupInfo.username) {
+        const entity = await client.getEntity(groupInfo.username);
+        return await client.getInputEntity(entity);
+      }
+      
+      // Priority 2: Use accessHash if available
+      if (groupInfo.accessHash) {
+        return new Api.InputChannel({
+          channelId: groupInfo.id,
+          accessHash: groupInfo.accessHash,
+        });
+      }
+      
+      // Priority 3: Try direct resolution
+      const entity = await client.getEntity(groupInfo.id);
+      return await client.getInputEntity(entity);
+    } catch (error: any) {
+      console.error('resolveTargetChannel error:', error.message);
+      throw error;
+    }
+  };
+
   // Helper: Enhanced participant check with detailed status
   const getParticipantInTargetEnhanced = async (
     client: TelegramClient, 
-    userRef: any, 
-    targetGroupIdOrInput: any
+    candidate: any, 
+    groupInfo: any
   ): Promise<{ isMember: boolean; raw?: any }> => {
     try {
-      // Resolve channel
-      const targetEntity = await client.getEntity(targetGroupIdOrInput);
-      const targetInputChannel = await client.getInputEntity(targetEntity);
+      // Resolve target channel
+      const targetInputChannel = await resolveTargetChannel(client, groupInfo);
 
-      // Resolve user input peer - prefer direct InputUser if we have accessHash
-      let userInputEntity: any;
-      try {
-        const u: any = userRef;
-        if (u && (u.accessHash || u.access_hash)) {
-          const accessHash = u.accessHash ?? u.access_hash;
-          userInputEntity = new Api.InputUser({ userId: u.id, accessHash });
-        } else {
-          userInputEntity = await client.getInputEntity(u?.id ?? userRef);
-        }
-      } catch (error: any) {
-        console.error(`Cannot get user input entity for ${JSON.stringify({ id: (userRef as any)?.id ?? userRef })}:`, error.message);
+      // Resolve user entity
+      const userEntities = await resolveUserEntity(client, candidate);
+      if (!userEntities) {
+        console.error(`Cannot resolve user entity for candidate:`, { id: candidate.id, username: candidate.username });
         return { isMember: false };
       }
 
       const result = await client.invoke(
         new Api.channels.GetParticipant({
           channel: targetInputChannel,
-          participant: userInputEntity,
+          participant: userEntities.inputPeerUser,
         })
       );
 
@@ -432,10 +517,10 @@ export default function MemberScraping() {
         await firstClient.connect();
         
         await logToDatabase('info', 'Kaynak grup üyeleri alınıyor...', 0);
-        const sourceEntity = await firstClient.getEntity(sourceGroupInfo.id);
+        const sourceEntity = await firstClient.getEntity(sourceGroupInfo.username || sourceGroupInfo.id);
         const sourceParticipants = await firstClient.getParticipants(sourceEntity, { limit: 2000 });
         
-        // Pre-filter and deduplicate
+        // Pre-filter and deduplicate - store rich candidate objects
         const seenIds = new Set<string>();
         for (const member of sourceParticipants) {
           const memberId = String(member.id);
@@ -454,7 +539,19 @@ export default function MemberScraping() {
           // Skip if already in target
           if (globalTargetMemberIds.has(memberId)) continue;
           
-          globalCandidateQueue.push(member);
+          // Store rich candidate object with accessHash
+          const candidate = {
+            id: member.id,
+            accessHash: (member as any).accessHash || (member as any).access_hash || null,
+            username: (member as any).username || null,
+            firstName: (member as any).firstName || '',
+            lastName: (member as any).lastName || '',
+            bot: (member as any).bot || false,
+            deleted: (member as any).deleted || false,
+            restricted: (member as any).restricted || false,
+          };
+          
+          globalCandidateQueue.push(candidate);
         }
         
         await firstClient.disconnect();
@@ -625,8 +722,7 @@ export default function MemberScraping() {
         // Enhanced pre-invite verification
         if (client) {
           try {
-            // Use targetGroupInfo.id, NOT sourceGroupInfo.id!
-            const checkResult = await getParticipantInTargetEnhanced(client, member as any, targetGroupInfo.id);
+            const checkResult = await getParticipantInTargetEnhanced(client, member, targetGroupInfo);
             
             if (checkResult.isMember) {
               console.log(`⏭️ Pre-invite check: ${memberId} already in target (enhanced), skipping`);
@@ -647,21 +743,13 @@ export default function MemberScraping() {
             totalAttempts++;
             accountData.attemptsThisSession++;
             
-            // Get proper entities for the invite
-            const targetEntity = await client.getEntity(targetGroupInfo.id);
-            const targetInputChannel = await client.getInputEntity(targetEntity);
+            // Resolve target channel
+            const targetInputChannel = await resolveTargetChannel(client, targetGroupInfo);
             
-            let userInputEntity;
-            try {
-              const m: any = member;
-              if (m && (m.accessHash || m.access_hash)) {
-                const accessHash = m.accessHash ?? m.access_hash;
-                userInputEntity = new Api.InputUser({ userId: m.id, accessHash });
-              } else {
-                userInputEntity = await client.getInputEntity(member.id);
-              }
-            } catch (error: any) {
-              console.error(`Cannot resolve user entity for ${memberId}:`, error.message);
+            // Resolve user entity
+            const userEntities = await resolveUserEntity(client, member);
+            if (!userEntities) {
+              console.error(`Cannot resolve user entity for ${memberId}`);
               globalProcessedIds.add(memberId);
               globalReservedIds.delete(memberId);
               
@@ -675,18 +763,24 @@ export default function MemberScraping() {
                 members_added: 0,
                 status: 'skipped',
                 error_message: 'Kullanıcı entity çözülemedi',
-                details: { member_id: memberId, reason: 'entity_resolution_failed', error: error.message },
+                details: { 
+                  member_id: memberId, 
+                  username: member.username || 'N/A',
+                  reason: 'entity_resolution_failed',
+                  has_access_hash: !!(member.accessHash || member.access_hash),
+                  has_username: !!member.username,
+                },
               });
               
               currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
               continue;
             }
             
-            // Invoke InviteToChannel
+            // Invoke InviteToChannel with proper InputUser
             await client.invoke(
               new Api.channels.InviteToChannel({
                 channel: targetInputChannel,
-                users: [userInputEntity],
+                users: [userEntities.inputUser],
               })
             );
 
@@ -696,7 +790,7 @@ export default function MemberScraping() {
             // POST-VERIFY: Check if member is actually now in target
             let postVerifySuccess = false;
             try {
-              const postCheckResult = await getParticipantInTargetEnhanced(client, member as any, targetGroupInfo.id);
+              const postCheckResult = await getParticipantInTargetEnhanced(client, member, targetGroupInfo);
               postVerifySuccess = postCheckResult.isMember;
             } catch (error: any) {
               console.error('Post-verify error:', error);
@@ -742,9 +836,9 @@ export default function MemberScraping() {
             // Add to success list
             successfullyAddedMembers.push({
               id: memberId,
-              username: (member as any).username || 'N/A',
-              firstName: (member as any).firstName || '',
-              lastName: (member as any).lastName || '',
+              username: member.username || 'N/A',
+              firstName: member.firstName || '',
+              lastName: member.lastName || '',
               accountUsed: account.name || account.phone_number,
               addedAt: new Date().toISOString(),
             });
@@ -773,8 +867,8 @@ export default function MemberScraping() {
               details: {
                 account_name: account.name || account.phone_number,
                 member_id: memberId,
-                member_username: (member as any).username || 'N/A',
-                member_name: `${(member as any).firstName || ''} ${(member as any).lastName || ''}`.trim(),
+                member_username: member.username || 'N/A',
+                member_name: `${member.firstName || ''} ${member.lastName || ''}`.trim(),
                 session_stats: {
                   success: accountData.successCountThisSession,
                   target: accountData.targetSuccess,
