@@ -219,20 +219,37 @@ export default function MemberScraping() {
   };
 
   // Helper: Fetch ALL participants from target group with pagination
-  const fetchAllParticipants = async (client: TelegramClient, groupInput: string): Promise<Set<string>> => {
+  const fetchAllParticipants = async (client: TelegramClient, groupIdOrInput: string): Promise<Set<string>> => {
     const allMemberIds = new Set<string>();
-    const targetEntity = await client.getEntity(groupInput);
-    let offset = 0;
-    const limit = 1000;
+    
+    try {
+      const targetEntity = await client.getEntity(groupIdOrInput);
+      let offset = 0;
+      const limit = 200; // Smaller batches for stability
 
-    while (true) {
-      const batch = await client.getParticipants(targetEntity, { limit, offset });
-      if (!batch || batch.length === 0) break;
-      
-      batch.forEach(p => allMemberIds.add(String(p.id)));
-      offset += batch.length;
-      
-      if (batch.length < limit) break; // Last page
+      while (true) {
+        try {
+          const batch = await client.getParticipants(targetEntity, { limit, offset });
+          if (!batch || batch.length === 0) break;
+          
+          batch.forEach(p => allMemberIds.add(String(p.id)));
+          offset += batch.length;
+          
+          console.log(`📊 Fetched ${offset} participants so far...`);
+          
+          if (batch.length < limit) break; // Last page
+          
+          // Small delay between batches to avoid rate limiting
+          await new Promise(resolve => setTimeout(resolve, 500));
+        } catch (error: any) {
+          console.error(`Error fetching participants at offset ${offset}:`, error.message);
+          // Continue with what we have
+          break;
+        }
+      }
+    } catch (error: any) {
+      console.error('Error in fetchAllParticipants:', error.message);
+      throw error;
     }
     
     return allMemberIds;
@@ -242,43 +259,57 @@ export default function MemberScraping() {
   const getParticipantInTargetEnhanced = async (
     client: TelegramClient, 
     userId: any, 
-    targetEntityOrId: any
+    targetGroupIdOrInput: any
   ): Promise<{ isMember: boolean; raw?: any }> => {
     try {
-      const targetEntity = typeof targetEntityOrId === 'string' 
-        ? await client.getEntity(targetEntityOrId)
-        : targetEntityOrId;
-      const userEntity = await client.getInputEntity(userId);
+      // Get proper entities
+      const targetEntity = await client.getEntity(targetGroupIdOrInput);
+      const targetInputChannel = await client.getInputEntity(targetEntity);
+      
+      // Get user input entity
+      let userInputEntity;
+      try {
+        userInputEntity = await client.getInputEntity(userId);
+      } catch (error: any) {
+        // If we can't get the user entity, they're probably not accessible
+        console.error(`Cannot get user entity for ${userId}:`, error.message);
+        return { isMember: false };
+      }
       
       const result = await client.invoke(
         new Api.channels.GetParticipant({
-          channel: targetEntity,
-          participant: userEntity,
+          channel: targetInputChannel,
+          participant: userInputEntity,
         })
       );
       
       const participant = (result as any).participant;
       
-      // Check participant type
+      // Check participant type - only these are ACTIVE members
       if (participant.className === 'ChannelParticipant' || 
           participant.className === 'ChannelParticipantAdmin' ||
           participant.className === 'ChannelParticipantCreator') {
         return { isMember: true, raw: participant };
       }
       
-      // ChannelParticipantBanned or ChannelParticipantLeft
+      // ChannelParticipantBanned with left=true or ChannelParticipantLeft means NOT a member
       if (participant.className === 'ChannelParticipantBanned' || 
           participant.className === 'ChannelParticipantLeft') {
         return { isMember: false, raw: participant };
       }
       
-      // Default: consider member if no error
+      // Default: if we got a result without error, consider as member
       return { isMember: true, raw: participant };
     } catch (error: any) {
       if (error.message?.includes('USER_NOT_PARTICIPANT')) {
         return { isMember: false };
       }
-      // Other errors: assume not member to be safe
+      if (error.message?.includes('CHANNEL_INVALID') || error.message?.includes('CHANNEL_PRIVATE')) {
+        console.error('Invalid channel access:', error.message);
+        return { isMember: false };
+      }
+      // For other errors (timeout, network issues), be conservative
+      console.error('getParticipantInTargetEnhanced error:', error.message);
       return { isMember: false };
     }
   };
@@ -593,8 +624,8 @@ export default function MemberScraping() {
         // Enhanced pre-invite verification
         if (client) {
           try {
-            const targetEntity = await client.getInputEntity(sourceGroupInfo.id);
-            const checkResult = await getParticipantInTargetEnhanced(client, member.id, targetEntity);
+            // Use targetGroupInfo.id, NOT sourceGroupInfo.id!
+            const checkResult = await getParticipantInTargetEnhanced(client, member.id, targetGroupInfo.id);
             
             if (checkResult.isMember) {
               console.log(`⏭️ Pre-invite check: ${memberId} already in target (enhanced), skipping`);
@@ -605,6 +636,7 @@ export default function MemberScraping() {
             }
           } catch (error: any) {
             console.error('Pre-invite verification error:', error);
+            // If verification fails, continue to attempt (safer approach)
           }
         }
 
@@ -614,14 +646,40 @@ export default function MemberScraping() {
             totalAttempts++;
             accountData.attemptsThisSession++;
             
-            const targetEntity = await client.getInputEntity(targetGroupInfo.id);
-            const userEntity = await client.getInputEntity(member.id);
+            // Get proper entities for the invite
+            const targetEntity = await client.getEntity(targetGroupInfo.id);
+            const targetInputChannel = await client.getInputEntity(targetEntity);
+            
+            let userInputEntity;
+            try {
+              userInputEntity = await client.getInputEntity(member.id);
+            } catch (error: any) {
+              console.error(`Cannot resolve user entity for ${memberId}:`, error.message);
+              globalProcessedIds.add(memberId);
+              globalReservedIds.delete(memberId);
+              
+              await supabase.from('member_scraping_logs').insert({
+                created_by: user?.id,
+                account_id: account.id,
+                source_group_id: sourceGroupInfo.id,
+                target_group_id: targetGroupInfo.id,
+                source_group_title: sourceGroupInfo.title,
+                target_group_title: targetGroupInfo.title,
+                members_added: 0,
+                status: 'skipped',
+                error_message: 'Kullanıcı entity çözülemedi',
+                details: { member_id: memberId, reason: 'entity_resolution_failed', error: error.message },
+              });
+              
+              currentAccountIndex = (currentAccountIndex + 1) % accountMembersData.length;
+              continue;
+            }
             
             // Invoke InviteToChannel
             await client.invoke(
               new Api.channels.InviteToChannel({
-                channel: targetEntity,
-                users: [userEntity],
+                channel: targetInputChannel,
+                users: [userInputEntity],
               })
             );
 
@@ -631,12 +689,12 @@ export default function MemberScraping() {
             // POST-VERIFY: Check if member is actually now in target
             let postVerifySuccess = false;
             try {
-              const postCheckResult = await getParticipantInTargetEnhanced(client, member.id, targetEntity);
+              const postCheckResult = await getParticipantInTargetEnhanced(client, member.id, targetGroupInfo.id);
               postVerifySuccess = postCheckResult.isMember;
             } catch (error: any) {
               console.error('Post-verify error:', error);
-              // Assume success if we can't verify
-              postVerifySuccess = true;
+              // Be conservative: if we can't verify, don't count as success
+              postVerifySuccess = false;
             }
             
             if (!postVerifySuccess) {
