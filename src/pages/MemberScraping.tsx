@@ -402,7 +402,7 @@ export default function MemberScraping() {
         await firstClient.connect();
         
         await logToDatabase('info', 'Hedef grup üyeleri tam sayım ile alınıyor...', 0);
-        globalTargetMemberIds = await fetchAllParticipants(firstClient, targetGroupInput);
+        globalTargetMemberIds = await fetchAllParticipants(firstClient, targetGroupInfo.id);
         await firstClient.disconnect();
         
         await logToDatabase('info', `✅ Hedef grupta toplam ${globalTargetMemberIds.size} üye tespit edildi`, 0);
