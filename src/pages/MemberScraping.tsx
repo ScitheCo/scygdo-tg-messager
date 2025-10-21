@@ -297,21 +297,6 @@ export default function MemberScraping() {
         }
       }
       
-      // Priority 3: Try getInputEntity as last resort
-      try {
-        const inputEntity = await client.getInputEntity(c.id);
-        if (inputEntity.className === 'InputPeerUser') {
-          return {
-            inputPeerUser: inputEntity,
-            inputUser: new Api.InputUser({ 
-              userId: (inputEntity as any).userId, 
-              accessHash: (inputEntity as any).accessHash 
-            }),
-          };
-        }
-      } catch (error: any) {
-        console.error(`getInputEntity failed for ${c.id}:`, error.message);
-      }
       
       return null;
     } catch (error: any) {
@@ -522,6 +507,7 @@ export default function MemberScraping() {
         
         // Pre-filter and deduplicate - store rich candidate objects
         const seenIds = new Set<string>();
+        let unresolvableCandidates = 0;
         for (const member of sourceParticipants) {
           const memberId = String(member.id);
           
@@ -551,11 +537,15 @@ export default function MemberScraping() {
             restricted: (member as any).restricted || false,
           };
           
-          globalCandidateQueue.push(candidate);
+          if (candidate.accessHash || candidate.username) {
+            globalCandidateQueue.push(candidate);
+          } else {
+            unresolvableCandidates++;
+          }
         }
         
         await firstClient.disconnect();
-        await logToDatabase('info', `✅ Global aday kuyruğu hazırlandı: ${globalCandidateQueue.length} aday`, 0);
+        await logToDatabase('info', `✅ Global aday kuyruğu hazırlandı: ${globalCandidateQueue.length} aday (atlanan: ${unresolvableCandidates} - username/accessHash yok)`, 0);
         console.log(`📋 Global candidate queue: ${globalCandidateQueue.length} candidates`);
       } catch (error: any) {
         console.error('Error building candidate queue:', error);
