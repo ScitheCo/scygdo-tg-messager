@@ -121,34 +121,18 @@ const MemberScraping = () => {
   
   const handleFetchMembers = async () => {
     if (!sessionId || !scannerAccountId) return;
-    setIsFetching(true);
+    
+    toast.message('Üye çekme işlemi başlatıldı', {
+      description: 'Telegram Runner local/sunucuda çalışıyor olmalı. İlerlemeyi buradan takip edebilirsiniz.',
+      duration: 5000
+    });
 
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 12000); // 12 sn güvenli zaman aşımı
-
-    try {
-      const { data, error } = await supabase.functions.invoke('scrape-source-members', {
-        body: { session_id: sessionId, scanner_account_id: scannerAccountId, filters: { exclude_bots: filterBots, exclude_admins: filterAdmins } },
-        signal: controller.signal as any,
-      });
-      clearTimeout(timeout);
-
-      if (error) throw error;
-
-      toast.success(`${data.total_queued} üye kuyruğa eklendi`);
-      setStage('process');
+    // Session zaten 'configuring' durumunda, runner bunu alıp işleyecek
+    // Sadece UI'ı güncelle
+    setTimeout(() => {
       refetchSession();
       refetchMembers();
-    } catch (error: any) {
-      if (error?.name === 'AbortError') {
-        toast.error('Telegram bağlantısı zaman aşımına uğradı. İşlem başlatılamadı.');
-      } else {
-        toast.error(error.message || 'Üyeleri çekerken hata oluştu');
-      }
-    } finally {
-      clearTimeout(timeout);
-      setIsFetching(false);
-    }
+    }, 2000);
   };
   
   const handleStart = async () => {
@@ -435,7 +419,25 @@ const MemberScraping = () => {
           {session && <div className="space-y-3">
             <p><strong>Kaynak:</strong> {session.source_group_input}</p>
             <p><strong>Hedef:</strong> {session.target_group_input}</p>
-            {session.total_members_fetched > 0 && (
+            
+            <div className="bg-yellow-50 dark:bg-yellow-950 border border-yellow-200 dark:border-yellow-800 rounded-lg p-4">
+              <div className="flex items-center gap-2">
+                <AlertCircle className="h-5 w-5 text-yellow-600 dark:text-yellow-400 flex-shrink-0" />
+                <div className="text-sm">
+                  <p className="font-semibold text-yellow-900 dark:text-yellow-100">
+                    Telegram Runner Gerekli
+                  </p>
+                  <p className="text-yellow-800 dark:text-yellow-200">
+                    Üyeleri çekmek için <code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">telegram-runner</code> klasöründeki script'i local/sunucuda çalıştırın.
+                  </p>
+                  <p className="text-yellow-800 dark:text-yellow-200 mt-1">
+                    Komut: <code className="bg-yellow-100 dark:bg-yellow-900 px-1 rounded">cd telegram-runner && npm install && npm run scraper</code>
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {session.status === 'fetching' && session.total_members_fetched > 0 && (
               <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
                 <div className="flex items-center gap-2">
                   <Loader2 className="h-5 w-5 text-blue-600 dark:text-blue-400 animate-spin" />
@@ -450,10 +452,41 @@ const MemberScraping = () => {
                 </div>
               </div>
             )}
+
+            {session.status === 'ready' && (
+              <div className="bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg p-4">
+                <div className="flex items-center gap-2">
+                  <CheckCircle className="h-5 w-5 text-green-600 dark:text-green-400" />
+                  <div>
+                    <p className="font-semibold text-green-900 dark:text-green-100">
+                      Üyeler başarıyla çekildi!
+                    </p>
+                    <p className="text-sm text-green-800 dark:text-green-200">
+                      {session.total_in_queue} üye kuyruğa eklendi, {session.total_filtered_out} üye filtrelendi
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {session.status === 'error' && (
+              <div className="bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 rounded-lg p-4">
+                <div className="flex items-center gap-2">
+                  <XCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
+                  <div>
+                    <p className="font-semibold text-red-900 dark:text-red-100">Hata oluştu</p>
+                    <p className="text-sm text-red-800 dark:text-red-200">Lütfen runner loglarını kontrol edin</p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>}
-          <Button onClick={handleFetchMembers} disabled={isFetching} className="w-full" size="lg">
-            {isFetching ? <><Loader2 className="mr-2 animate-spin" />Üyeler çekiliyor...</> : <><Download className="mr-2" />Üyeleri Çek</>}
-          </Button>
+
+          {session?.status === 'ready' && (
+            <Button onClick={() => setStage('process')} className="w-full" size="lg">
+              İleri: Üye Ekleme <ArrowRight className="ml-2" />
+            </Button>
+          )}
         </CardContent></Card>
       )}
       
