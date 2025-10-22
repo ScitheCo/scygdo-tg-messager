@@ -475,7 +475,9 @@ const MemberScraping = () => {
                   <XCircle className="h-5 w-5 text-red-600 dark:text-red-400" />
                   <div>
                     <p className="font-semibold text-red-900 dark:text-red-100">Hata oluştu</p>
-                    <p className="text-sm text-red-800 dark:text-red-200">Lütfen runner loglarını kontrol edin</p>
+                    <p className="text-sm text-red-800 dark:text-red-200">
+                      {(session as any).error_message || 'Lütfen runner loglarını kontrol edin'}
+                    </p>
                   </div>
                 </div>
               </div>
