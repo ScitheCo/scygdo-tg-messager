@@ -101,6 +101,24 @@ serve(async (req) => {
 
     // Process each member
     for (const member of queuedMembers) {
+      // Check session status before each member to honor pause/cancel immediately
+      const { data: currentSession } = await supabase
+        .from('scraping_sessions')
+        .select('status')
+        .eq('id', session_id)
+        .single();
+
+      if (!currentSession || currentSession.status !== 'running') {
+        return new Response(
+          JSON.stringify({
+            success: true,
+            processed: processedCount,
+            session_status: currentSession?.status || 'paused'
+          }),
+          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+        );
+      }
+
       // Mark as processing
       await supabase
         .from('scraped_members')
@@ -111,18 +129,9 @@ serve(async (req) => {
       const sessionAccount = sessionAccounts[currentAccountIndex % sessionAccounts.length];
       const account = sessionAccount.telegram_accounts;
 
-      // Check daily limit
-      const { data: dailyLimitData } = await supabase
-        .from('account_daily_limits')
-        .select('members_added_today')
-        .eq('account_id', account.id)
-        .eq('date', new Date().toISOString().split('T')[0])
-        .single();
-
-      const addedToday = dailyLimitData?.members_added_today || 0;
-
-      if (addedToday >= dailyLimit) {
-        // Deactivate account
+      // Check daily limit using session account counters (per-session)
+      if ((sessionAccount.added_today || 0) >= dailyLimit) {
+        // Deactivate account for this session when limit reached
         await supabase
           .from('session_accounts')
           .update({ is_active: false })
@@ -131,6 +140,7 @@ serve(async (req) => {
         currentAccountIndex++;
         continue;
       }
+
 
       try {
         // Connect to Telegram with improved settings

@@ -43,6 +43,7 @@ const MemberScraping = () => {
   const [useExistingSession, setUseExistingSession] = useState(false);
   const [selectedExistingSessionId, setSelectedExistingSessionId] = useState("");
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const invokingRef = useRef(false);
   
   const { data: allAccounts } = useQuery({
     queryKey: ["telegram-accounts"],
@@ -135,7 +136,15 @@ const MemberScraping = () => {
       .subscribe();
     return () => { supabase.removeChannel(channel); };
   }, [sessionId]);
-  
+  // Session durumu değiştiğinde otomatik olarak polling'i durdur
+  useEffect(() => {
+    if (!session) return;
+    if (session.status !== 'running') {
+      stopPolling();
+      setIsProcessing(false);
+    }
+  }, [session?.status]);
+
   const handleCreateSession = async () => {
     // Önceki session seçildiyse
     if (useExistingSession && selectedExistingSessionId) {
@@ -468,8 +477,8 @@ const MemberScraping = () => {
     if (pollingIntervalRef.current) return;
     
     pollingIntervalRef.current = setInterval(async () => {
-      if (!sessionId) return;
-      
+      if (!sessionId || !isProcessing || invokingRef.current) return;
+      invokingRef.current = true;
       try {
         const { data, error } = await supabase.functions.invoke('process-member-invites', {
           body: {
@@ -481,7 +490,7 @@ const MemberScraping = () => {
         if (error) throw error;
         
         if (data?.session_status === 'paused') {
-          toast.warning("Tüm hesapların günlük limiti doldu");
+          toast.warning("Tüm hesapların günlük limiti doldu veya oturum duraklatıldı");
           stopPolling();
           setIsProcessing(false);
         }
@@ -493,6 +502,8 @@ const MemberScraping = () => {
         }
       } catch (error: any) {
         console.error('Polling error:', error);
+      } finally {
+        invokingRef.current = false;
       }
     }, 5000);
   };
@@ -569,7 +580,9 @@ const MemberScraping = () => {
     return <Badge variant={config.variant} className={config.className}>{config.text}</Badge>;
   };
   
-  const progressPercent = session ? (session.total_processed / session.total_in_queue) * 100 : 0;
+  const processedDone = members ? members.filter((m: any) => m.status === 'success' || m.status === 'failed').length : 0;
+  const totalItems = members?.length ?? 0;
+  const progressPercent = totalItems > 0 ? (processedDone / totalItems) * 100 : 0;
   
   return (
     <div className="min-h-screen bg-background">
