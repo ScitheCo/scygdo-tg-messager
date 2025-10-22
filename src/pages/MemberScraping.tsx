@@ -139,26 +139,47 @@ const MemberScraping = () => {
   const handleCreateSession = async () => {
     // Önceki session seçildiyse
     if (useExistingSession && selectedExistingSessionId) {
-      const { data: existingSession, error } = await supabase
-        .from("scraping_sessions")
-        .select("*, session_accounts(account_id)")
-        .eq("id", selectedExistingSessionId)
-        .single();
-      
-      if (error || !existingSession) {
-        toast.error("Session bulunamadı");
+      if (!targetInput || selectedInviterIds.length === 0) {
+        toast.error("Lütfen hedef grup ve davet hesaplarını seçin");
         return;
       }
       
-      // Ayarları yükle
-      const settings = existingSession.settings as any;
-      setDailyLimit(settings?.daily_limit || 50);
-      setInviteDelay(settings?.invite_delay || 60);
-      setBatchDelay(settings?.batch_delay || 180);
-      
-      setSessionId(existingSession.id);
-      setStage('process');
-      toast.success("Önceki session yüklendi, devam ediyoruz!");
+      try {
+        // Session'u güncelle
+        await supabase
+          .from("scraping_sessions")
+          .update({
+            target_group_input: targetInput,
+            settings: { 
+              daily_limit: dailyLimit, 
+              invite_delay: inviteDelay, 
+              batch_delay: batchDelay, 
+              filter_bots: filterBots, 
+              filter_admins: filterAdmins 
+            },
+            updated_at: new Date().toISOString()
+          })
+          .eq("id", selectedExistingSessionId);
+        
+        // Mevcut session_accounts'ları sil
+        await supabase
+          .from("session_accounts")
+          .delete()
+          .eq("session_id", selectedExistingSessionId);
+        
+        // Yeni hesapları ekle
+        const accountInserts = selectedInviterIds.map(accountId => ({ 
+          session_id: selectedExistingSessionId, 
+          account_id: accountId 
+        }));
+        await supabase.from("session_accounts").insert(accountInserts);
+        
+        setSessionId(selectedExistingSessionId);
+        setStage('process');
+        toast.success("Session güncellendi, devam ediyoruz!");
+      } catch (error: any) {
+        toast.error("Session güncellenirken hata: " + error.message);
+      }
       return;
     }
     
@@ -565,7 +586,37 @@ const MemberScraping = () => {
                 <div className="space-y-2">
                   <Label>Önceki Session'larım</Label>
                   {previousSessions && previousSessions.length > 0 ? (
-                    <Select value={selectedExistingSessionId} onValueChange={setSelectedExistingSessionId}>
+                    <Select 
+                      value={selectedExistingSessionId} 
+                      onValueChange={async (value) => {
+                        setSelectedExistingSessionId(value);
+                        
+                        // Seçilen session'ın bilgilerini yükle
+                        const { data: sess } = await supabase
+                          .from("scraping_sessions")
+                          .select("*, session_accounts(account_id)")
+                          .eq("id", value)
+                          .single();
+                        
+                        if (sess) {
+                          // Kaynak ve hedef grupları form'a yükle
+                          setSourceInput(sess.source_group_input);
+                          setTargetInput(sess.target_group_input);
+                          
+                          // Ayarları yükle
+                          const settings = sess.settings as any;
+                          setDailyLimit(settings?.daily_limit || 50);
+                          setInviteDelay(settings?.invite_delay || 60);
+                          setBatchDelay(settings?.batch_delay || 180);
+                          setFilterBots(settings?.filter_bots ?? true);
+                          setFilterAdmins(settings?.filter_admins ?? true);
+                          
+                          // Mevcut hesapları seç
+                          const accountIds = sess.session_accounts?.map((sa: any) => sa.account_id) || [];
+                          setSelectedInviterIds(accountIds);
+                        }
+                      }}
+                    >
                       <SelectTrigger>
                         <SelectValue placeholder="Session seçin" />
                       </SelectTrigger>
@@ -590,17 +641,12 @@ const MemberScraping = () => {
                   ) : (
                     <p className="text-sm text-muted-foreground">Devam ettirilebilecek session bulunamadı</p>
                   )}
-                  
-                  {selectedExistingSessionId && (
-                    <Button onClick={handleCreateSession} className="w-full" size="lg">
-                      Bu Session'u Devam Ettir <ArrowRight className="ml-2" />
-                    </Button>
-                  )}
                 </div>
               )}
             </div>
 
-            {!useExistingSession && (
+            {/* Yeni session VEYA önceki session seçildiyse ayarları göster */}
+            {(!useExistingSession || selectedExistingSessionId) && (
               <>
             <div className="grid grid-cols-2 gap-4">
               <div>
@@ -732,7 +778,14 @@ const MemberScraping = () => {
               </div>
             </div>
 
-            <Button onClick={handleCreateSession} className="w-full" size="lg">Oturumu Oluştur <ArrowRight className="ml-2" /></Button>
+            <Button 
+              onClick={handleCreateSession} 
+              className="w-full" 
+              size="lg"
+              disabled={useExistingSession && !selectedExistingSessionId}
+            >
+              {useExistingSession ? 'Session\'u Güncelle ve Devam Et' : 'Oturumu Oluştur'} <ArrowRight className="ml-2" />
+            </Button>
               </>
             )}
           </CardContent></Card>
