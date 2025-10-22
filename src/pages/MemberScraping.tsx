@@ -122,18 +122,31 @@ const MemberScraping = () => {
   const handleFetchMembers = async () => {
     if (!sessionId || !scannerAccountId) return;
     setIsFetching(true);
+
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 12000); // 12 sn güvenli zaman aşımı
+
     try {
       const { data, error } = await supabase.functions.invoke('scrape-source-members', {
-        body: { session_id: sessionId, scanner_account_id: scannerAccountId, filters: { exclude_bots: filterBots, exclude_admins: filterAdmins } }
+        body: { session_id: sessionId, scanner_account_id: scannerAccountId, filters: { exclude_bots: filterBots, exclude_admins: filterAdmins } },
+        signal: controller.signal as any,
       });
+      clearTimeout(timeout);
+
       if (error) throw error;
+
       toast.success(`${data.total_queued} üye kuyruğa eklendi`);
       setStage('process');
       refetchSession();
       refetchMembers();
     } catch (error: any) {
-      toast.error(error.message);
+      if (error?.name === 'AbortError') {
+        toast.error('Telegram bağlantısı zaman aşımına uğradı. İşlem başlatılamadı.');
+      } else {
+        toast.error(error.message || 'Üyeleri çekerken hata oluştu');
+      }
     } finally {
+      clearTimeout(timeout);
       setIsFetching(false);
     }
   };
