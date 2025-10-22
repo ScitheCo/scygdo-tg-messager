@@ -402,11 +402,41 @@ const MemberScraping = () => {
         )}
       
       {stage === 'fetch' && (
-        <Card><CardHeader><CardTitle>2. Üyeleri Çek</CardTitle></CardHeader><CardContent className="space-y-4">
-          {session && <div className="space-y-2">
+        <Card><CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle>2. Üyeleri Çek</CardTitle>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => {
+                setStage('configure');
+                setSessionId(null);
+                setSourceValidation(null);
+                setTargetValidation(null);
+              }}
+            >
+              ← Geri
+            </Button>
+          </div>
+        </CardHeader><CardContent className="space-y-4">
+          {session && <div className="space-y-3">
             <p><strong>Kaynak:</strong> {session.source_group_input}</p>
             <p><strong>Hedef:</strong> {session.target_group_input}</p>
-            {session.total_members_fetched > 0 && <p><strong>İlerleme:</strong> {session.total_members_fetched} üye çekildi</p>}
+            {session.total_members_fetched > 0 && (
+              <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+                <div className="flex items-center gap-2">
+                  <Loader2 className="h-5 w-5 text-blue-600 dark:text-blue-400 animate-spin" />
+                  <div>
+                    <p className="font-semibold text-blue-900 dark:text-blue-100">
+                      Üyeler çekiliyor...
+                    </p>
+                    <p className="text-sm text-blue-800 dark:text-blue-200">
+                      {session.total_members_fetched} üye çekildi
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>}
           <Button onClick={handleFetchMembers} disabled={isFetching} className="w-full" size="lg">
             {isFetching ? <><Loader2 className="mr-2 animate-spin" />Üyeler çekiliyor...</> : <><Download className="mr-2" />Üyeleri Çek</>}
@@ -415,7 +445,28 @@ const MemberScraping = () => {
       )}
       
       {stage === 'process' && session && (
-        <Card><CardHeader><CardTitle>3. Üye Ekleme İşlemi</CardTitle></CardHeader><CardContent className="space-y-4">
+        <Card><CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle>3. Üye Ekleme İşlemi</CardTitle>
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => {
+                if (confirm('İşlemi iptal edip başa dönmek istiyor musunuz?')) {
+                  handleCancel();
+                  setTimeout(() => {
+                    setStage('configure');
+                    setSessionId(null);
+                    setSourceValidation(null);
+                    setTargetValidation(null);
+                  }, 500);
+                }
+              }}
+            >
+              ← Başa Dön
+            </Button>
+          </div>
+        </CardHeader><CardContent className="space-y-4">
           <div className="space-y-2">
             <div className="flex justify-between text-sm"><span>İşlenen: {session.total_processed} / {session.total_in_queue}</span><span>{progressPercent.toFixed(1)}%</span></div>
             <Progress value={progressPercent} />
