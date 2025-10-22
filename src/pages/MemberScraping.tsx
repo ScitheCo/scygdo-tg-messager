@@ -475,37 +475,70 @@ const MemberScraping = () => {
   
   const startPolling = () => {
     if (pollingIntervalRef.current) return;
+    if (!sessionId) return;
     
-    pollingIntervalRef.current = setInterval(async () => {
-      if (!sessionId || !isProcessing || invokingRef.current) return;
-      invokingRef.current = true;
-      try {
-        const { data, error } = await supabase.functions.invoke('process-member-invites', {
-          body: {
-            session_id: sessionId,
-            batch_size: 10
-          }
-        });
-        
-        if (error) throw error;
-        
-        if (data?.session_status === 'paused') {
-          toast.warning("Tüm hesapların günlük limiti doldu veya oturum duraklatıldı");
-          stopPolling();
-          setIsProcessing(false);
-        }
-        
-        if (data?.session_status === 'completed') {
-          toast.success("Tüm üyeler işlendi!");
-          stopPolling();
-          setIsProcessing(false);
-        }
-      } catch (error: any) {
-        console.error('Polling error:', error);
-      } finally {
-        invokingRef.current = false;
-      }
+    console.log('🚀 Starting polling for session:', sessionId);
+    
+    // İlk çağrıyı hemen yap
+    processNextBatch();
+    
+    // Sonra interval ile devam et
+    pollingIntervalRef.current = setInterval(() => {
+      processNextBatch();
     }, 5000);
+  };
+  
+  const processNextBatch = async () => {
+    if (!sessionId || invokingRef.current) {
+      console.log('⏭️ Skipping batch: sessionId?', !!sessionId, 'invoking?', invokingRef.current);
+      return;
+    }
+    
+    // Session durumunu kontrol et
+    const { data: currentSession } = await supabase
+      .from('scraping_sessions')
+      .select('status')
+      .eq('id', sessionId)
+      .single();
+    
+    if (!currentSession || currentSession.status !== 'running') {
+      console.log('⏸️ Session not running, status:', currentSession?.status);
+      stopPolling();
+      setIsProcessing(false);
+      return;
+    }
+    
+    invokingRef.current = true;
+    console.log('📞 Calling process-member-invites...');
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('process-member-invites', {
+        body: {
+          session_id: sessionId,
+          batch_size: 10
+        }
+      });
+      
+      console.log('✅ Edge function response:', data);
+      
+      if (error) throw error;
+      
+      if (data?.session_status === 'paused') {
+        toast.warning("Tüm hesapların günlük limiti doldu veya oturum duraklatıldı");
+        stopPolling();
+        setIsProcessing(false);
+      }
+      
+      if (data?.session_status === 'completed') {
+        toast.success("Tüm üyeler işlendi!");
+        stopPolling();
+        setIsProcessing(false);
+      }
+    } catch (error: any) {
+      console.error('❌ Polling error:', error);
+    } finally {
+      invokingRef.current = false;
+    }
   };
   
   const stopPolling = () => {
