@@ -61,20 +61,11 @@ const MemberScraping = () => {
   const { data: previousSessions } = useQuery({
     queryKey: ["previous-sessions"],
     queryFn: async () => {
+      // Önce sadece session'ları çek
       const { data, error } = await supabase
         .from("scraping_sessions")
-        .select(`
-          id, 
-          source_group_title, 
-          target_group_title, 
-          created_at,
-          status,
-          total_in_queue,
-          total_processed,
-          scraped_members!inner(status)
-        `)
+        .select("id, source_group_title, target_group_title, created_at, status, total_in_queue, total_processed")
         .eq("created_by", user?.id)
-        .in("status", ["ready", "paused", "running"])
         .order("created_at", { ascending: false });
       
       if (error) throw error;
@@ -95,7 +86,8 @@ const MemberScraping = () => {
         })
       );
       
-      return sessionsWithQueuedCount;
+      // Sadece devam ettirilebilecek session'ları filtrele (en az 1 queued üyesi olanlar)
+      return sessionsWithQueuedCount.filter(s => s.queued_count > 0);
     },
     enabled: !!user?.id,
   });
