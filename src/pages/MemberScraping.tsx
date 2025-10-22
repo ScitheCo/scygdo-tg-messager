@@ -268,7 +268,7 @@ const MemberScraping = () => {
                       setSourceInput(e.target.value);
                       setSourceValidation(null);
                     }} 
-                    placeholder="@grupadi veya link" 
+                    placeholder="@grupadi, -1001234567890 veya link" 
                   />
                   <Button 
                     onClick={() => handleValidateGroup(sourceInput, true)} 
@@ -295,7 +295,7 @@ const MemberScraping = () => {
                       setTargetInput(e.target.value);
                       setTargetValidation(null);
                     }} 
-                    placeholder="@grupadi veya link" 
+                    placeholder="@grupadi, -1001234567890 veya link" 
                   />
                   <Button 
                     onClick={() => handleValidateGroup(targetInput, false)} 

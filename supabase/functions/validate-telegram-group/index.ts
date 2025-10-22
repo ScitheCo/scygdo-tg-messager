@@ -1,6 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.75.0';
-import { Api, TelegramClient } from 'npm:telegram@2.26.22';
-import { StringSession } from 'npm:telegram@2.26.22/sessions';
+import { TelegramClient } from 'npm:telegram@2.26.22';
+import { StringSession } from 'npm:telegram@2.26.22/sessions/index.js';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -80,13 +80,22 @@ Deno.serve(async (req) => {
     console.log('Connected to Telegram');
 
     try {
-      // Try to get the entity (group/channel)
-      const entity: any = await client.getEntity(group_input);
+      let entity: any;
+      
+      // Check if input is numeric ID
+      if (/^-?\d+$/.test(group_input.trim())) {
+        console.log('Input is numeric ID:', group_input);
+        entity = await client.getEntity(parseInt(group_input));
+      } else {
+        // Username or invite link
+        console.log('Input is username or link:', group_input);
+        entity = await client.getEntity(group_input);
+      }
       
       const result = {
         valid: true,
         telegram_id: entity.id.toString(),
-        title: entity.title || '',
+        title: entity.title || entity.firstName || 'Unknown',
         username: entity.username || null,
         is_channel: entity.className === 'Channel',
         access_hash: entity.accessHash?.toString() || null
