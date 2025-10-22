@@ -123,7 +123,7 @@ const MemberScraping = () => {
     if (!sessionId || !scannerAccountId) return;
     
     setIsFetching(true);
-    toast.loading('Üyeler çekiliyor...');
+    toast.loading('İşlem sıraya alındı, worker tarafından işlenecek...');
 
     try {
       const { data, error } = await supabase.functions.invoke('scrape-source-members', {
@@ -140,23 +140,14 @@ const MemberScraping = () => {
       if (error) throw error;
 
       if (data?.success) {
-        toast.success(`${data.total_queued} üye başarıyla çekildi`);
-        setStage('process');
+        toast.success('İşlem sıraya alındı. Worker çalıştığında üyeler çekilecek.');
+        // Realtime subscription otomatik güncellenecek
       } else {
         throw new Error(data?.error || 'Bilinmeyen hata');
       }
     } catch (error: any) {
-      console.error('Fetch error:', error);
-      toast.error('Üye çekme hatası: ' + (error.message || 'Bilinmeyen hata'));
-      
-      // Hata durumunda session'ı error durumuna al
-      await supabase
-        .from('scraping_sessions')
-        .update({ 
-          status: 'error',
-          error_message: error.message || 'Üye çekme sırasında hata oluştu'
-        })
-        .eq('id', sessionId);
+      console.error('Queue error:', error);
+      toast.error('Sıraya alma hatası: ' + (error.message || 'Bilinmeyen hata'));
     } finally {
       setIsFetching(false);
     }
@@ -192,19 +183,25 @@ const MemberScraping = () => {
     toast.success("İşlem iptal edildi");
   };
   
-  const startPolling = () => {
-    if (pollingIntervalRef.current) return;
-    pollingIntervalRef.current = setInterval(async () => {
-      if (!sessionId) return;
-      try {
-        const { data, error } = await supabase.functions.invoke('process-member-invites', { body: { session_id: sessionId, batch_size: 10 } });
-        if (error) throw error;
-        if (data?.session_status === 'paused') { toast.warning("Tüm hesapların günlük limiti doldu"); stopPolling(); setIsProcessing(false); }
-        if (data?.session_status === 'completed') { toast.success("Tüm üyeler işlendi"); stopPolling(); setIsProcessing(false); }
-      } catch (error: any) {
-        console.error('Polling error:', error);
-      }
-    }, 5000);
+  const startPolling = async () => {
+    if (!sessionId) return;
+    
+    // Just mark the session as ready to process
+    // Worker will handle the actual invites
+    try {
+      const { error } = await supabase.functions.invoke('process-member-invites', {
+        body: {
+          session_id: sessionId
+        }
+      });
+      
+      if (error) throw error;
+      
+      toast.success('İşlem başlatıldı. Worker üye eklemeye başlayacak.');
+    } catch (error) {
+      console.error('Start error:', error);
+      toast.error('Başlatma hatası');
+    }
   };
   
   const stopPolling = () => {
