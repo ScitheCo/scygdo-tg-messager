@@ -214,12 +214,12 @@ const MemberScraping = () => {
             hasMore = false;
           } else {
             const batch = result.users.map((user: any, idx: number) => {
-              const participant = result.participants[idx];
+              const participant = result.participants?.[idx];
               return {
                 user,
                 participant,
-                isAdmin: participant.className === 'ChannelParticipantAdmin' || 
-                        participant.className === 'ChannelParticipantCreator'
+                isAdmin: participant?.className === 'ChannelParticipantAdmin' || 
+                        participant?.className === 'ChannelParticipantCreator'
               };
             });
             
