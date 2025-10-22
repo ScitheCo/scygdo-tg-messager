@@ -9,6 +9,31 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
 
+// Permanent error types that should not be retried
+const PERMANENT_ERRORS = [
+  'CHAT_ADMIN_REQUIRED',
+  'USER_PRIVACY_RESTRICTED',
+  'USER_ID_INVALID',
+  'USER_BOT',
+  'PEER_FLOOD',
+  'CHANNEL_PRIVATE',
+  'INVITE_REQUEST_SENT',
+  'USER_RESTRICTED',
+  'USER_KICKED',
+  'USER_BANNED_IN_CHANNEL',
+  'USER_NOT_MUTUAL_CONTACT',
+  'USER_CHANNELS_TOO_MUCH',
+  'CHANNELS_TOO_MUCH'
+];
+
+// Temporary errors that should requeue the member
+const TEMPORARY_ERRORS = [
+  'FLOOD_WAIT',
+  'TIMEOUT',
+  'CONNECTION_FAILED',
+  'NETWORK_ERROR'
+];
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -22,7 +47,7 @@ serve(async (req) => {
 
     const { session_id, batch_size = 10 } = await req.json();
 
-    console.log('Processing invites for session:', session_id);
+    console.log('🚀 Processing invites for session:', session_id);
 
     // Get session
     const { data: session } = await supabase
@@ -32,8 +57,9 @@ serve(async (req) => {
       .single();
 
     if (!session || session.status !== 'running') {
+      console.log('⏸️ Session not running, status:', session?.status);
       return new Response(
-        JSON.stringify({ success: false, message: 'Session not running' }),
+        JSON.stringify({ success: true, message: 'Session not running', session_status: session?.status }),
         { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -51,7 +77,7 @@ serve(async (req) => {
       .or(`flood_wait_until.is.null,flood_wait_until.lt.${new Date().toISOString()}`);
 
     if (!sessionAccounts || sessionAccounts.length === 0) {
-      // No active accounts, pause session
+      console.log('⏸️ No active accounts available, pausing session');
       await supabase
         .from('scraping_sessions')
         .update({ status: 'paused' })
@@ -68,6 +94,8 @@ serve(async (req) => {
       );
     }
 
+    console.log(`📋 Found ${sessionAccounts.length} active accounts`);
+
     // Get queued members
     const { data: queuedMembers } = await supabase
       .from('scraped_members')
@@ -78,7 +106,7 @@ serve(async (req) => {
       .limit(batch_size);
 
     if (!queuedMembers || queuedMembers.length === 0) {
-      // All done
+      console.log('✅ All members processed, completing session');
       await supabase
         .from('scraping_sessions')
         .update({ status: 'completed' })
@@ -94,66 +122,39 @@ serve(async (req) => {
       );
     }
 
-    let processedCount = 0;
-    let successCount = 0;
-    let failedCount = 0;
-    let currentAccountIndex = 0;
+    console.log(`👥 Processing ${queuedMembers.length} queued members`);
 
-    // Process each member
-    for (const member of queuedMembers) {
-      // Check session status before each member to honor pause/cancel immediately
-      const { data: currentSession } = await supabase
-        .from('scraping_sessions')
-        .select('status')
-        .eq('id', session_id)
-        .single();
+    // Step 1: Connect all accounts once and cache clients
+    const accountClients = new Map();
+    const validAccounts = [];
+    let targetEntity = null;
 
-      if (!currentSession || currentSession.status !== 'running') {
-        return new Response(
-          JSON.stringify({
-            success: true,
-            processed: processedCount,
-            session_status: currentSession?.status || 'paused'
-          }),
-          { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
-        );
-      }
-
-      // Mark as processing
-      await supabase
-        .from('scraped_members')
-        .update({ status: 'processing' })
-        .eq('id', member.id);
-
-      // Select account (round-robin)
-      const sessionAccount = sessionAccounts[currentAccountIndex % sessionAccounts.length];
+    for (const sessionAccount of sessionAccounts) {
       const account = sessionAccount.telegram_accounts;
-
-      // Check daily limit using session account counters (per-session)
+      
+      // Check daily limit
       if ((sessionAccount.added_today || 0) >= dailyLimit) {
-        // Deactivate account for this session when limit reached
+        console.log(`⏭️ Account ${account.phone_number} reached daily limit`);
         await supabase
           .from('session_accounts')
           .update({ is_active: false })
           .eq('id', sessionAccount.id);
-
-        currentAccountIndex++;
         continue;
       }
 
-
       try {
-        // Connect to Telegram with improved settings
+        console.log(`🔌 Connecting account ${account.phone_number}...`);
         const stringSession = new StringSession(account.session_string || '');
         const client = new TelegramClient(
           stringSession,
           parseInt(account.telegram_api_credentials.api_id),
           account.telegram_api_credentials.api_hash,
           { 
-            connectionRetries: 5,
-            retryDelay: 2000,
+            useWSS: true,
+            connectionRetries: 2,
+            retryDelay: 1500,
             autoReconnect: true,
-            requestRetries: 3
+            requestRetries: 2
           }
         );
 
@@ -164,31 +165,152 @@ serve(async (req) => {
         );
         
         await Promise.race([connectPromise, timeoutPromise]);
-        console.log('Connected to Telegram for member processing');
+        console.log(`✅ Connected: ${account.phone_number}`);
 
-        // Resolve target channel
-        let targetEntity;
-        try {
-          if (session.target_group_input.startsWith('@') || !session.target_group_input.match(/^\d+$/)) {
-            targetEntity = await client.getEntity(session.target_group_input);
-          } else {
-            targetEntity = await client.getEntity(parseInt(session.target_group_input));
-          }
-        } catch (error) {
-          throw new Error('Cannot resolve target group');
-        }
-
-        // Cache user entity
-        let userEntity;
-        if (member.username) {
+        // Resolve target entity once
+        if (!targetEntity) {
           try {
-            userEntity = await client.getEntity(member.username);
-          } catch (error) {
-            console.error('Failed to get entity by username:', error);
+            if (session.target_group_input.startsWith('-100')) {
+              const channelId = session.target_group_input.replace('-100', '');
+              targetEntity = await client.getEntity(parseInt(channelId));
+            } else if (session.target_group_input.startsWith('@')) {
+              targetEntity = await client.getEntity(session.target_group_input);
+            } else {
+              targetEntity = await client.getEntity(parseInt(session.target_group_input));
+            }
+            console.log(`🎯 Target group resolved: ${targetEntity.title || 'Unknown'}`);
+          } catch (error: any) {
+            console.error('❌ Cannot resolve target group:', error.message);
+            throw new Error('Cannot resolve target group');
           }
         }
 
-        if (!userEntity && member.access_hash) {
+        // Check if this account has invite permission
+        try {
+          const participant = await client.invoke(
+            new Api.channels.GetParticipant({
+              channel: targetEntity,
+              participant: 'me'
+            })
+          );
+
+          const canInvite = participant.participant?.adminRights?.inviteUsers || 
+                           participant.participant?.className === 'ChannelParticipantCreator';
+
+          if (!canInvite) {
+            console.log(`❌ Account ${account.phone_number} lacks invite permission`);
+            await supabase
+              .from('session_accounts')
+              .update({ is_active: false })
+              .eq('id', sessionAccount.id);
+            
+            await supabase
+              .from('member_scraping_logs')
+              .insert({
+                account_id: account.id,
+                status: 'error',
+                error_message: 'CHAT_ADMIN_REQUIRED - No invite permission',
+                details: { check: 'permission' }
+              });
+            
+            await client.disconnect();
+            continue;
+          }
+
+          console.log(`✅ Account ${account.phone_number} has invite permission`);
+        } catch (error: any) {
+          console.error(`❌ Permission check failed for ${account.phone_number}:`, error.message);
+          await supabase
+            .from('session_accounts')
+            .update({ is_active: false })
+            .eq('id', sessionAccount.id);
+          await client.disconnect();
+          continue;
+        }
+
+        // Store valid client and account
+        accountClients.set(account.id, { client, sessionAccount, account });
+        validAccounts.push({ sessionAccount, account });
+
+      } catch (error: any) {
+        console.error(`❌ Failed to connect account ${account.phone_number}:`, error.message);
+        await supabase
+          .from('session_accounts')
+          .update({ is_active: false })
+          .eq('id', sessionAccount.id);
+      }
+    }
+
+    // Check if we have any valid accounts after connection and permission checks
+    if (validAccounts.length === 0) {
+      console.log('⏸️ No accounts with invite permission, pausing session');
+      
+      // Disconnect any clients that were connected
+      for (const [_, { client }] of accountClients) {
+        try {
+          await client.disconnect();
+        } catch (e) {
+          console.error('Error disconnecting client:', e);
+        }
+      }
+
+      await supabase
+        .from('scraping_sessions')
+        .update({ 
+          status: 'paused',
+          error_message: 'No accounts have invite permission in target group'
+        })
+        .eq('id', session_id);
+
+      return new Response(
+        JSON.stringify({ 
+          success: true, 
+          processed: 0,
+          session_status: 'paused',
+          message: 'No accounts have invite permission'
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
+    console.log(`✅ ${validAccounts.length} valid accounts ready for inviting`);
+
+    // Step 2: Process members using round-robin
+    let processedCount = 0;
+    let successCount = 0;
+    let failedCount = 0;
+    let currentAccountIndex = 0;
+
+    for (const member of queuedMembers) {
+      // Check session status before each member
+      const { data: currentSession } = await supabase
+        .from('scraping_sessions')
+        .select('status')
+        .eq('id', session_id)
+        .single();
+
+      if (!currentSession || currentSession.status !== 'running') {
+        console.log('⏸️ Session status changed, stopping processing');
+        break;
+      }
+
+      // Mark as processing
+      await supabase
+        .from('scraped_members')
+        .update({ status: 'processing' })
+        .eq('id', member.id);
+
+      // Get next account (round-robin)
+      const { sessionAccount, account } = validAccounts[currentAccountIndex % validAccounts.length];
+      const { client } = accountClients.get(account.id);
+
+      console.log(`👤 Processing member ${member.user_id} with account ${account.phone_number}`);
+
+      try {
+        // Resolve user entity
+        let userEntity = null;
+
+        if (member.access_hash) {
           try {
             const inputUser = new Api.InputUser({
               userId: member.user_id as any,
@@ -196,13 +318,35 @@ serve(async (req) => {
             });
             const result = await client.invoke(new Api.users.GetUsers({ id: [inputUser] }));
             userEntity = result[0];
-          } catch (error) {
-            console.error('Failed to get entity by access_hash:', error);
+            console.log(`✅ User entity resolved via access_hash`);
+          } catch (error: any) {
+            console.error('Failed to resolve user via access_hash:', error.message);
           }
         }
 
         if (!userEntity) {
-          throw new Error('Cannot resolve user entity');
+          console.log(`❌ Cannot resolve user ${member.user_id} - marking as failed`);
+          await supabase
+            .from('scraped_members')
+            .update({
+              status: 'failed',
+              processed_by_account_id: account.id
+            })
+            .eq('id', member.id);
+
+          await supabase
+            .from('member_scraping_logs')
+            .insert({
+              account_id: account.id,
+              status: 'error',
+              error_message: 'USER_ID_INVALID - Cannot resolve user entity',
+              details: { user_id: member.user_id }
+            });
+
+          failedCount++;
+          processedCount++;
+          currentAccountIndex++;
+          continue;
         }
 
         // Pre-check if already member
@@ -214,7 +358,7 @@ serve(async (req) => {
             })
           );
 
-          // Already member
+          console.log(`✅ User ${member.user_id} already member, marking success`);
           await supabase
             .from('scraped_members')
             .update({
@@ -223,11 +367,21 @@ serve(async (req) => {
             })
             .eq('id', member.id);
 
+          // Update session account stats (but not daily limit)
+          await supabase
+            .from('session_accounts')
+            .update({
+              total_success: sessionAccount.total_success + 1,
+              total_attempts: sessionAccount.total_attempts + 1,
+              last_activity_at: new Date().toISOString()
+            })
+            .eq('id', sessionAccount.id);
+
           successCount++;
           processedCount++;
           currentAccountIndex++;
-          await client.disconnect();
           continue;
+
         } catch (error: any) {
           if (error.errorMessage !== 'USER_NOT_PARTICIPANT') {
             console.log('Pre-check error (continuing):', error.errorMessage);
@@ -243,7 +397,9 @@ serve(async (req) => {
             })
           );
 
-          // Success
+          console.log(`✅ Successfully invited user ${member.user_id}`);
+
+          // Mark success
           await supabase
             .from('scraped_members')
             .update({
@@ -254,28 +410,32 @@ serve(async (req) => {
 
           // Update daily limit
           const today = new Date().toISOString().split('T')[0];
-          await supabase
+          const { data: dailyLimitData } = await supabase
             .from('account_daily_limits')
-            .upsert({
-              account_id: account.id,
-              date: today,
-              members_added_today: 1
-            }, {
-              onConflict: 'account_id,date',
-              ignoreDuplicates: false
-            })
-            .select()
-            .then(async ({ data }) => {
-              if (data && data[0]) {
-                await supabase
-                  .from('account_daily_limits')
-                  .update({
-                    members_added_today: (data[0].members_added_today || 0) + 1
-                  })
-                  .eq('account_id', account.id)
-                  .eq('date', today);
-              }
-            });
+            .select('*')
+            .eq('account_id', account.id)
+            .eq('date', today)
+            .single();
+
+          if (dailyLimitData) {
+            await supabase
+              .from('account_daily_limits')
+              .update({
+                members_added_today: (dailyLimitData.members_added_today || 0) + 1,
+                last_used_at: new Date().toISOString()
+              })
+              .eq('account_id', account.id)
+              .eq('date', today);
+          } else {
+            await supabase
+              .from('account_daily_limits')
+              .insert({
+                account_id: account.id,
+                date: today,
+                members_added_today: 1,
+                last_used_at: new Date().toISOString()
+              });
+          }
 
           // Update session account
           await supabase
@@ -301,62 +461,102 @@ serve(async (req) => {
             });
 
           successCount++;
-          console.log(`Successfully invited user ${member.user_id}`);
 
         } catch (error: any) {
-          console.error('Invite error:', error.errorMessage || error.message);
+          const errorMsg = error.errorMessage || error.message || 'Unknown error';
+          console.error(`❌ Invite error for user ${member.user_id}:`, errorMsg);
 
-          if (error.errorMessage === 'FLOOD_WAIT') {
+          // Classify error
+          if (errorMsg === 'FLOOD_WAIT') {
             const seconds = error.seconds || 300;
             const waitUntil = new Date(Date.now() + seconds * 1000);
 
+            console.log(`⏳ FLOOD_WAIT ${seconds}s for account ${account.phone_number}`);
+
             await supabase
               .from('session_accounts')
-              .update({ flood_wait_until: waitUntil.toISOString() })
+              .update({ 
+                flood_wait_until: waitUntil.toISOString(),
+                total_attempts: sessionAccount.total_attempts + 1
+              })
+              .eq('id', sessionAccount.id);
+
+            // Requeue member
+            await supabase
+              .from('scraped_members')
+              .update({ status: 'queued' })
+              .eq('id', member.id);
+
+            // Remove this account from rotation for this batch
+            validAccounts.splice(currentAccountIndex % validAccounts.length, 1);
+            
+            if (validAccounts.length === 0) {
+              console.log('⏸️ All accounts in flood wait, pausing session');
+              await supabase
+                .from('scraping_sessions')
+                .update({ status: 'paused' })
+                .eq('id', session_id);
+              break;
+            }
+
+          } else if (PERMANENT_ERRORS.some(perm => errorMsg.includes(perm))) {
+            // Permanent error - don't retry
+            console.log(`❌ Permanent error for user ${member.user_id}: ${errorMsg}`);
+            
+            await supabase
+              .from('scraped_members')
+              .update({
+                status: 'failed',
+                processed_by_account_id: account.id
+              })
+              .eq('id', member.id);
+
+            await supabase
+              .from('session_accounts')
+              .update({
+                total_attempts: sessionAccount.total_attempts + 1
+              })
               .eq('id', sessionAccount.id);
 
             await supabase
+              .from('member_scraping_logs')
+              .insert({
+                account_id: account.id,
+                status: 'error',
+                error_message: errorMsg,
+                details: { user_id: member.user_id }
+              });
+
+            failedCount++;
+
+          } else {
+            // Temporary/unknown error - requeue
+            console.log(`⚠️ Temporary error for user ${member.user_id}: ${errorMsg}, requeuing`);
+            
+            await supabase
               .from('scraped_members')
-              .update({ status: 'queued' }) // Put back in queue
+              .update({ status: 'queued' })
               .eq('id', member.id);
 
-            currentAccountIndex++;
-            await client.disconnect();
-            continue;
+            await supabase
+              .from('session_accounts')
+              .update({
+                total_attempts: sessionAccount.total_attempts + 1
+              })
+              .eq('id', sessionAccount.id);
           }
-
-          // Other errors
-          await supabase
-            .from('scraped_members')
-            .update({
-              status: 'failed',
-              processed_by_account_id: account.id
-            })
-            .eq('id', member.id);
-
-          await supabase
-            .from('member_scraping_logs')
-            .insert({
-              account_id: account.id,
-              status: 'error',
-              error_message: error.errorMessage || error.message,
-              details: {
-                user_id: member.user_id
-              }
-            });
-
-          failedCount++;
         }
 
-        await client.disconnect();
         processedCount++;
         currentAccountIndex++;
 
         // Delay between invites
-        await new Promise(resolve => setTimeout(resolve, inviteDelay * 1000));
+        if (processedCount < queuedMembers.length) {
+          await new Promise(resolve => setTimeout(resolve, inviteDelay * 1000));
+        }
 
       } catch (error: any) {
-        console.error('Processing error:', error);
+        console.error(`❌ Processing error for member ${member.user_id}:`, error.message);
         
         await supabase
           .from('scraped_members')
@@ -366,9 +566,28 @@ serve(async (req) => {
           })
           .eq('id', member.id);
 
+        await supabase
+          .from('member_scraping_logs')
+          .insert({
+            account_id: account?.id,
+            status: 'error',
+            error_message: error.message,
+            details: { user_id: member.user_id }
+          });
+
         failedCount++;
         processedCount++;
         currentAccountIndex++;
+      }
+    }
+
+    // Disconnect all clients
+    console.log('🔌 Disconnecting all clients...');
+    for (const [_, { client }] of accountClients) {
+      try {
+        await client.disconnect();
+      } catch (e) {
+        console.error('Error disconnecting client:', e);
       }
     }
 
@@ -382,6 +601,8 @@ serve(async (req) => {
       })
       .eq('id', session_id);
 
+    console.log(`✅ Batch complete: ${processedCount} processed, ${successCount} success, ${failedCount} failed`);
+
     return new Response(
       JSON.stringify({
         success: true,
@@ -394,7 +615,7 @@ serve(async (req) => {
     );
 
   } catch (error: any) {
-    console.error('Error in process-member-invites:', error);
+    console.error('❌ Error in process-member-invites:', error);
     
     return new Response(
       JSON.stringify({ success: false, error: error?.message || 'Unknown error' }),
