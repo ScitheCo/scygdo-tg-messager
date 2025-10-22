@@ -183,59 +183,38 @@ export type Database = {
         Row: {
           access_hash: number | null
           created_at: string
-          error_reason: string | null
-          first_name: string | null
           id: string
           is_admin: boolean
           is_bot: boolean
-          last_name: string | null
-          phone: string | null
-          processed_at: string | null
           processed_by_account_id: string | null
-          retry_count: number
           sequence_number: number
           session_id: string
           status: string
           user_id: number
-          username: string | null
         }
         Insert: {
           access_hash?: number | null
           created_at?: string
-          error_reason?: string | null
-          first_name?: string | null
           id?: string
           is_admin?: boolean
           is_bot?: boolean
-          last_name?: string | null
-          phone?: string | null
-          processed_at?: string | null
           processed_by_account_id?: string | null
-          retry_count?: number
           sequence_number: number
           session_id: string
           status?: string
           user_id: number
-          username?: string | null
         }
         Update: {
           access_hash?: number | null
           created_at?: string
-          error_reason?: string | null
-          first_name?: string | null
           id?: string
           is_admin?: boolean
           is_bot?: boolean
-          last_name?: string | null
-          phone?: string | null
-          processed_at?: string | null
           processed_by_account_id?: string | null
-          retry_count?: number
           sequence_number?: number
           session_id?: string
           status?: string
           user_id?: number
-          username?: string | null
         }
         Relationships: [
           {

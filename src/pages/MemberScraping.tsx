@@ -40,6 +40,8 @@ const MemberScraping = () => {
   const [targetValidation, setTargetValidation] = useState<{ valid: boolean; title?: string; error?: string } | null>(null);
   const [isValidatingSource, setIsValidatingSource] = useState(false);
   const [isValidatingTarget, setIsValidatingTarget] = useState(false);
+  const [useExistingSession, setUseExistingSession] = useState(false);
+  const [selectedExistingSessionId, setSelectedExistingSessionId] = useState("");
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
   const { data: allAccounts } = useQuery({
@@ -54,6 +56,49 @@ const MemberScraping = () => {
   const accounts = showMyAccountsOnly 
     ? allAccounts?.filter(acc => acc.created_by === user?.id)
     : allAccounts;
+  
+  // Önceki session'ları listele
+  const { data: previousSessions } = useQuery({
+    queryKey: ["previous-sessions"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("scraping_sessions")
+        .select(`
+          id, 
+          source_group_title, 
+          target_group_title, 
+          created_at,
+          status,
+          total_in_queue,
+          total_processed,
+          scraped_members!inner(status)
+        `)
+        .eq("created_by", user?.id)
+        .in("status", ["ready", "paused", "running"])
+        .order("created_at", { ascending: false });
+      
+      if (error) throw error;
+      
+      // Her session için denenmemiş üye sayısını hesapla
+      const sessionsWithQueuedCount = await Promise.all(
+        (data || []).map(async (session) => {
+          const { count } = await supabase
+            .from("scraped_members")
+            .select("*", { count: "exact", head: true })
+            .eq("session_id", session.id)
+            .eq("status", "queued");
+          
+          return {
+            ...session,
+            queued_count: count || 0
+          };
+        })
+      );
+      
+      return sessionsWithQueuedCount;
+    },
+    enabled: !!user?.id,
+  });
   
   const { data: session, refetch: refetchSession } = useQuery({
     queryKey: ["scraping-session", sessionId],
@@ -100,6 +145,32 @@ const MemberScraping = () => {
   }, [sessionId]);
   
   const handleCreateSession = async () => {
+    // Önceki session seçildiyse
+    if (useExistingSession && selectedExistingSessionId) {
+      const { data: existingSession, error } = await supabase
+        .from("scraping_sessions")
+        .select("*, session_accounts(account_id)")
+        .eq("id", selectedExistingSessionId)
+        .single();
+      
+      if (error || !existingSession) {
+        toast.error("Session bulunamadı");
+        return;
+      }
+      
+      // Ayarları yükle
+      const settings = existingSession.settings as any;
+      setDailyLimit(settings?.daily_limit || 50);
+      setInviteDelay(settings?.invite_delay || 60);
+      setBatchDelay(settings?.batch_delay || 180);
+      
+      setSessionId(existingSession.id);
+      setStage('process');
+      toast.success("Önceki session yüklendi, devam ediyoruz!");
+      return;
+    }
+    
+    // Yeni session oluştur
     if (!sourceInput || !targetInput || !scannerAccountId || selectedInviterIds.length === 0) {
       toast.error("Lütfen tüm alanları doldurun");
       return;
@@ -248,10 +319,10 @@ const MemberScraping = () => {
 
       toast.loading('Üyeler filtreleniyor ve kaydediliyor...', { id: loadingToast });
 
-      // Filtreleme ve kaydetme
+      // Filtreleme ve kaydetme - TOPLU INSERT İLE OPTİMİZE EDİLDİ
       let sequenceNumber = 1;
       let filteredCount = 0;
-      let queuedCount = 0;
+      const membersToInsert: any[] = [];
 
       for (const item of allParticipants) {
         const user = item.user;
@@ -267,25 +338,35 @@ const MemberScraping = () => {
           continue;
         }
 
-        // Supabase'e kaydet
+        // Array'e ekle (sadece gerekli alanlar)
+        membersToInsert.push({
+          session_id: sessionId,
+          sequence_number: sequenceNumber++,
+          user_id: user.id?.toString(),
+          access_hash: user.accessHash?.toString() || null,
+          is_bot: user.bot || false,
+          is_admin: item.isAdmin,
+          status: 'queued'
+        });
+      }
+
+      // Toplu insert - 1000'erli parçalar halinde
+      const chunkSize = 1000;
+      let queuedCount = 0;
+      
+      for (let i = 0; i < membersToInsert.length; i += chunkSize) {
+        const chunk = membersToInsert.slice(i, i + chunkSize);
         const { error: insertError } = await supabase
           .from('scraped_members')
-          .insert({
-            session_id: sessionId,
-            sequence_number: sequenceNumber++,
-            user_id: user.id?.toString(),
-            username: user.username || null,
-            first_name: user.firstName || null,
-            last_name: user.lastName || null,
-            access_hash: user.accessHash?.toString() || null,
-            phone: user.phone || null,
-            is_bot: user.bot || false,
-            is_admin: item.isAdmin,
-            status: 'queued'
-          });
-
+          .insert(chunk);
+        
         if (!insertError) {
-          queuedCount++;
+          queuedCount += chunk.length;
+        }
+        
+        // Progress güncelle (her 1000 üyede bir)
+        if (i % chunkSize === 0 && i > 0) {
+          toast.loading(`${queuedCount} üye kaydedildi...`, { id: loadingToast });
         }
       }
 
@@ -468,6 +549,67 @@ const MemberScraping = () => {
       
         {stage === 'configure' && (
           <Card><CardHeader><CardTitle>1. Yapılandırma</CardTitle></CardHeader><CardContent className="space-y-4">
+            
+            {/* Yeni veya Önceki Session Seçimi */}
+            <div className="space-y-4">
+              <div className="flex items-center space-x-4">
+                <div className="flex items-center space-x-2">
+                  <Checkbox 
+                    checked={!useExistingSession} 
+                    onCheckedChange={() => setUseExistingSession(false)}
+                  />
+                  <Label>Yeni Session Oluştur</Label>
+                </div>
+                <div className="flex items-center space-x-2">
+                  <Checkbox 
+                    checked={useExistingSession} 
+                    onCheckedChange={() => setUseExistingSession(true)}
+                  />
+                  <Label>Önceki Session'u Devam Ettir</Label>
+                </div>
+              </div>
+
+              {useExistingSession && (
+                <div className="space-y-2">
+                  <Label>Önceki Session'larım</Label>
+                  {previousSessions && previousSessions.length > 0 ? (
+                    <Select value={selectedExistingSessionId} onValueChange={setSelectedExistingSessionId}>
+                      <SelectTrigger>
+                        <SelectValue placeholder="Session seçin" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {previousSessions.map((sess: any) => (
+                          <SelectItem key={sess.id} value={sess.id}>
+                            <div className="flex flex-col">
+                              <div className="font-medium">
+                                {sess.source_group_title || 'Kaynak'} → {sess.target_group_title || 'Hedef'}
+                              </div>
+                              <div className="text-xs text-muted-foreground">
+                                📅 {new Date(sess.created_at).toLocaleDateString('tr-TR')} | 
+                                👥 {sess.total_in_queue} toplam | 
+                                ⏳ {sess.queued_count} bekliyor |
+                                ✅ {sess.total_processed} işlendi
+                              </div>
+                            </div>
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">Devam ettirilebilecek session bulunamadı</p>
+                  )}
+                  
+                  {selectedExistingSessionId && (
+                    <Button onClick={handleCreateSession} className="w-full" size="lg">
+                      Bu Session'u Devam Ettir <ArrowRight className="ml-2" />
+                    </Button>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {!useExistingSession && (
+              <>
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <Label>Kaynak Grup (Üyeleri çekilecek grup)</Label>
@@ -599,6 +741,8 @@ const MemberScraping = () => {
             </div>
 
             <Button onClick={handleCreateSession} className="w-full" size="lg">Oturumu Oluştur <ArrowRight className="ml-2" /></Button>
+              </>
+            )}
           </CardContent></Card>
         )}
       
