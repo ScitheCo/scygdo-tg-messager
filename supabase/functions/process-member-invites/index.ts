@@ -48,8 +48,7 @@ serve(async (req) => {
       .select('*, telegram_accounts(*, telegram_api_credentials(*))')
       .eq('session_id', session_id)
       .eq('is_active', true)
-      .is('flood_wait_until', null)
-      .or(`flood_wait_until.lt.${new Date().toISOString()}`);
+      .or(`flood_wait_until.is.null,flood_wait_until.lt.${new Date().toISOString()}`);
 
     if (!sessionAccounts || sessionAccounts.length === 0) {
       // No active accounts, pause session
@@ -210,9 +209,7 @@ serve(async (req) => {
             .from('scraped_members')
             .update({
               status: 'success',
-              processed_by_account_id: account.id,
-              processed_at: new Date().toISOString(),
-              error_reason: 'Already member'
+              processed_by_account_id: account.id
             })
             .eq('id', member.id);
 
@@ -241,8 +238,7 @@ serve(async (req) => {
             .from('scraped_members')
             .update({
               status: 'success',
-              processed_by_account_id: account.id,
-              processed_at: new Date().toISOString()
+              processed_by_account_id: account.id
             })
             .eq('id', member.id);
 
@@ -306,10 +302,7 @@ serve(async (req) => {
             .from('scraped_members')
             .update({
               status: 'failed',
-              processed_by_account_id: account.id,
-              processed_at: new Date().toISOString(),
-              error_reason: error.errorMessage || error.message,
-              retry_count: member.retry_count + 1
+              processed_by_account_id: account.id
             })
             .eq('id', member.id);
 
@@ -341,9 +334,7 @@ serve(async (req) => {
         await supabase
           .from('scraped_members')
           .update({
-            status: 'failed',
-            error_reason: error.message,
-            retry_count: member.retry_count + 1
+            status: 'failed'
           })
           .eq('id', member.id);
 
