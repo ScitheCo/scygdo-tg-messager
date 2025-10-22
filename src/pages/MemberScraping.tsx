@@ -122,17 +122,44 @@ const MemberScraping = () => {
   const handleFetchMembers = async () => {
     if (!sessionId || !scannerAccountId) return;
     
-    toast.message('Üye çekme işlemi başlatıldı', {
-      description: 'Telegram Runner local/sunucuda çalışıyor olmalı. İlerlemeyi buradan takip edebilirsiniz.',
-      duration: 5000
-    });
+    setIsFetching(true);
+    toast.loading('Üyeler çekiliyor...');
 
-    // Session zaten 'configuring' durumunda, runner bunu alıp işleyecek
-    // Sadece UI'ı güncelle
-    setTimeout(() => {
-      refetchSession();
-      refetchMembers();
-    }, 2000);
+    try {
+      const { data, error } = await supabase.functions.invoke('scrape-source-members', {
+        body: {
+          session_id: sessionId,
+          scanner_account_id: scannerAccountId,
+          filters: {
+            exclude_bots: filterBots,
+            exclude_admins: filterAdmins
+          }
+        }
+      });
+
+      if (error) throw error;
+
+      if (data?.success) {
+        toast.success(`${data.total_queued} üye başarıyla çekildi`);
+        setStage('process');
+      } else {
+        throw new Error(data?.error || 'Bilinmeyen hata');
+      }
+    } catch (error: any) {
+      console.error('Fetch error:', error);
+      toast.error('Üye çekme hatası: ' + (error.message || 'Bilinmeyen hata'));
+      
+      // Hata durumunda session'ı error durumuna al
+      await supabase
+        .from('scraping_sessions')
+        .update({ 
+          status: 'error',
+          error_message: error.message || 'Üye çekme sırasında hata oluştu'
+        })
+        .eq('id', sessionId);
+    } finally {
+      setIsFetching(false);
+    }
   };
   
   const handleStart = async () => {
