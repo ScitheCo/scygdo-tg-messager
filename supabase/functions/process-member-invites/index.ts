@@ -253,10 +253,29 @@ serve(async (req) => {
             .eq('id', member.id);
 
           // Update daily limit
-          await supabase.rpc('increment', {
-            table_name: 'account_daily_limits',
-            account_id: account.id
-          });
+          const today = new Date().toISOString().split('T')[0];
+          await supabase
+            .from('account_daily_limits')
+            .upsert({
+              account_id: account.id,
+              date: today,
+              members_added_today: 1
+            }, {
+              onConflict: 'account_id,date',
+              ignoreDuplicates: false
+            })
+            .select()
+            .then(async ({ data }) => {
+              if (data && data[0]) {
+                await supabase
+                  .from('account_daily_limits')
+                  .update({
+                    members_added_today: (data[0].members_added_today || 0) + 1
+                  })
+                  .eq('account_id', account.id)
+                  .eq('date', today);
+              }
+            });
 
           // Update session account
           await supabase
@@ -277,7 +296,6 @@ serve(async (req) => {
               status: 'success',
               details: {
                 user_id: member.user_id,
-                username: member.username,
                 action: 'invite'
               }
             });
@@ -323,8 +341,7 @@ serve(async (req) => {
               status: 'error',
               error_message: error.errorMessage || error.message,
               details: {
-                user_id: member.user_id,
-                username: member.username
+                user_id: member.user_id
               }
             });
 
@@ -344,7 +361,8 @@ serve(async (req) => {
         await supabase
           .from('scraped_members')
           .update({
-            status: 'failed'
+            status: 'failed',
+            processed_by_account_id: account?.id
           })
           .eq('id', member.id);
 
