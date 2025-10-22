@@ -11,9 +11,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Play, Pause, StopCircle, ArrowRight, Download, Loader2 } from "lucide-react";
+import { Play, Pause, StopCircle, ArrowRight, Download, Loader2, CheckCircle, XCircle, AlertCircle } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
+import { Header } from "@/components/Header";
 
 const MemberScraping = () => {
   const { user } = useAuth();
@@ -30,9 +32,14 @@ const MemberScraping = () => {
   const [filterAdmins, setFilterAdmins] = useState(true);
   const [isFetching, setIsFetching] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [showMyAccountsOnly, setShowMyAccountsOnly] = useState(false);
+  const [sourceValidation, setSourceValidation] = useState<{ valid: boolean; title?: string; error?: string } | null>(null);
+  const [targetValidation, setTargetValidation] = useState<{ valid: boolean; title?: string; error?: string } | null>(null);
+  const [isValidatingSource, setIsValidatingSource] = useState(false);
+  const [isValidatingTarget, setIsValidatingTarget] = useState(false);
   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
-  const { data: accounts } = useQuery({
+  const { data: allAccounts } = useQuery({
     queryKey: ["telegram-accounts"],
     queryFn: async () => {
       const { data, error } = await supabase.from("telegram_accounts").select("*").eq("is_active", true).order("created_at");
@@ -40,6 +47,10 @@ const MemberScraping = () => {
       return data;
     },
   });
+
+  const accounts = showMyAccountsOnly 
+    ? allAccounts?.filter(acc => acc.created_by === user?.id)
+    : allAccounts;
   
   const { data: session, refetch: refetchSession } = useQuery({
     queryKey: ["scraping-session", sessionId],
@@ -177,6 +188,51 @@ const MemberScraping = () => {
   };
   
   useEffect(() => { return () => stopPolling(); }, []);
+
+  const handleValidateGroup = async (groupInput: string, isSource: boolean) => {
+    if (!groupInput || !scannerAccountId) {
+      toast.error("Lütfen önce grup adı ve tarayıcı hesap seçin");
+      return;
+    }
+
+    if (isSource) setIsValidatingSource(true);
+    else setIsValidatingTarget(true);
+
+    try {
+      const { data, error } = await supabase.functions.invoke('validate-telegram-group', {
+        body: { group_input: groupInput, account_id: scannerAccountId }
+      });
+
+      if (error) throw error;
+
+      if (data.valid) {
+        if (isSource) {
+          setSourceValidation({ valid: true, title: data.title });
+        } else {
+          setTargetValidation({ valid: true, title: data.title });
+        }
+        toast.success(`${data.title} bulundu ✓`);
+      } else {
+        if (isSource) {
+          setSourceValidation({ valid: false, error: data.error });
+        } else {
+          setTargetValidation({ valid: false, error: data.error });
+        }
+        toast.error(data.error || "Grup bulunamadı");
+      }
+    } catch (error: any) {
+      const errorMsg = error.message || "Doğrulama hatası";
+      if (isSource) {
+        setSourceValidation({ valid: false, error: errorMsg });
+      } else {
+        setTargetValidation({ valid: false, error: errorMsg });
+      }
+      toast.error(errorMsg);
+    } finally {
+      if (isSource) setIsValidatingSource(false);
+      else setIsValidatingTarget(false);
+    }
+  };
   
   const getStatusBadge = (status: string) => {
     const variants: Record<string, any> = {
@@ -193,46 +249,148 @@ const MemberScraping = () => {
   const progressPercent = session ? (session.total_processed / session.total_in_queue) * 100 : 0;
   
   return (
-    <div className="container mx-auto p-6 space-y-6">
-      <h1 className="text-3xl font-bold">Üye Ekleme Sistemi V2</h1>
+    <div className="min-h-screen bg-background">
+      <Header />
+      <div className="container mx-auto p-6 space-y-6">
+        <div className="flex items-center justify-between">
+          <h1 className="text-3xl font-bold">Üye Ekleme Sistemi V2</h1>
+        </div>
       
-      {stage === 'configure' && (
-        <Card><CardHeader><CardTitle>1. Yapılandırma</CardTitle></CardHeader><CardContent className="space-y-4">
-          <div className="grid grid-cols-2 gap-4">
-            <div><Label>Kaynak Grup</Label><Input value={sourceInput} onChange={(e) => setSourceInput(e.target.value)} placeholder="@grupadi" /></div>
-            <div><Label>Hedef Grup</Label><Input value={targetInput} onChange={(e) => setTargetInput(e.target.value)} placeholder="@grupadi" /></div>
-          </div>
+        {stage === 'configure' && (
+          <Card><CardHeader><CardTitle>1. Yapılandırma</CardTitle></CardHeader><CardContent className="space-y-4">
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <Label>Kaynak Grup (Üyeleri çekilecek grup)</Label>
+                <div className="flex gap-2">
+                  <Input 
+                    value={sourceInput} 
+                    onChange={(e) => {
+                      setSourceInput(e.target.value);
+                      setSourceValidation(null);
+                    }} 
+                    placeholder="@grupadi veya link" 
+                  />
+                  <Button 
+                    onClick={() => handleValidateGroup(sourceInput, true)} 
+                    disabled={isValidatingSource || !scannerAccountId}
+                    variant="outline"
+                    size="icon"
+                  >
+                    {isValidatingSource ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                  </Button>
+                </div>
+                {sourceValidation && (
+                  <div className={`flex items-center gap-2 mt-2 text-sm ${sourceValidation.valid ? 'text-green-600' : 'text-red-600'}`}>
+                    {sourceValidation.valid ? <CheckCircle className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+                    <span>{sourceValidation.valid ? sourceValidation.title : sourceValidation.error}</span>
+                  </div>
+                )}
+              </div>
+              <div>
+                <Label>Hedef Grup (Üyelerin ekleneceği grup)</Label>
+                <div className="flex gap-2">
+                  <Input 
+                    value={targetInput} 
+                    onChange={(e) => {
+                      setTargetInput(e.target.value);
+                      setTargetValidation(null);
+                    }} 
+                    placeholder="@grupadi veya link" 
+                  />
+                  <Button 
+                    onClick={() => handleValidateGroup(targetInput, false)} 
+                    disabled={isValidatingTarget || !scannerAccountId}
+                    variant="outline"
+                    size="icon"
+                  >
+                    {isValidatingTarget ? <Loader2 className="h-4 w-4 animate-spin" /> : <CheckCircle className="h-4 w-4" />}
+                  </Button>
+                </div>
+                {targetValidation && (
+                  <div className={`flex items-center gap-2 mt-2 text-sm ${targetValidation.valid ? 'text-green-600' : 'text-red-600'}`}>
+                    {targetValidation.valid ? <CheckCircle className="h-4 w-4" /> : <XCircle className="h-4 w-4" />}
+                    <span>{targetValidation.valid ? targetValidation.title : targetValidation.error}</span>
+                  </div>
+                )}
+              </div>
+            </div>
           <div><Label>Tarayıcı Hesap</Label>
             <Select value={scannerAccountId} onValueChange={setScannerAccountId}>
               <SelectTrigger><SelectValue placeholder="Hesap seçin" /></SelectTrigger>
               <SelectContent>{accounts?.map((acc) => <SelectItem key={acc.id} value={acc.id}>{acc.name || acc.phone_number}</SelectItem>)}</SelectContent>
             </Select>
           </div>
-          <div><Label>Davet Hesapları</Label>
-            <div className="border rounded-lg p-4 space-y-2 max-h-48 overflow-auto">
-              {accounts?.map((acc) => (
-                <div key={acc.id} className="flex items-center space-x-2">
-                  <Checkbox checked={selectedInviterIds.includes(acc.id)} onCheckedChange={(checked) => {
-                    if (checked) setSelectedInviterIds([...selectedInviterIds, acc.id]);
-                    else setSelectedInviterIds(selectedInviterIds.filter(id => id !== acc.id));
-                  }} />
-                  <label className="text-sm">{acc.name || acc.phone_number}</label>
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <Label>Davet Hesapları</Label>
+                <div className="flex items-center gap-2">
+                  <Label htmlFor="my-accounts-only" className="text-sm text-muted-foreground">Sadece benim hesaplarım</Label>
+                  <Switch 
+                    id="my-accounts-only"
+                    checked={showMyAccountsOnly} 
+                    onCheckedChange={setShowMyAccountsOnly}
+                  />
                 </div>
-              ))}
+              </div>
+              <div className="border rounded-lg p-4 space-y-2 max-h-48 overflow-auto">
+                {accounts && accounts.length > 0 ? (
+                  accounts.map((acc) => (
+                    <div key={acc.id} className="flex items-center space-x-2">
+                      <Checkbox checked={selectedInviterIds.includes(acc.id)} onCheckedChange={(checked) => {
+                        if (checked) setSelectedInviterIds([...selectedInviterIds, acc.id]);
+                        else setSelectedInviterIds(selectedInviterIds.filter(id => id !== acc.id));
+                      }} />
+                      <label className="text-sm">{acc.name || acc.phone_number}</label>
+                    </div>
+                  ))
+                ) : (
+                  <p className="text-sm text-muted-foreground text-center py-4">
+                    {showMyAccountsOnly ? "Henüz hesap eklemediniz" : "Hiç hesap yok"}
+                  </p>
+                )}
+              </div>
             </div>
-          </div>
-          <div className="grid grid-cols-3 gap-4">
-            <div><Label>Günlük Limit</Label><Input type="number" value={dailyLimit} onChange={(e) => setDailyLimit(parseInt(e.target.value))} /></div>
-            <div><Label>Davet Gecikmesi (sn)</Label><Input type="number" value={inviteDelay} onChange={(e) => setInviteDelay(parseInt(e.target.value))} /></div>
-            <div><Label>Parti Gecikmesi (sn)</Label><Input type="number" value={batchDelay} onChange={(e) => setBatchDelay(parseInt(e.target.value))} /></div>
-          </div>
-          <div className="flex gap-4">
-            <div className="flex items-center space-x-2"><Checkbox checked={filterBots} onCheckedChange={(c) => setFilterBots(c as boolean)} /><Label>Botları çıkar</Label></div>
-            <div className="flex items-center space-x-2"><Checkbox checked={filterAdmins} onCheckedChange={(c) => setFilterAdmins(c as boolean)} /><Label>Adminleri çıkar</Label></div>
-          </div>
-          <Button onClick={handleCreateSession} className="w-full" size="lg">Oturumu Oluştur <ArrowRight className="ml-2" /></Button>
-        </CardContent></Card>
-      )}
+            <div className="grid grid-cols-3 gap-4">
+              <div>
+                <Label>Günlük Limit (hesap başına)</Label>
+                <Input type="number" value={dailyLimit} onChange={(e) => setDailyLimit(parseInt(e.target.value))} />
+                <p className="text-xs text-muted-foreground mt-1">Her hesabın günde ekleyebileceği maksimum üye sayısı</p>
+              </div>
+              <div>
+                <Label>Her davet arasında bekleme (saniye)</Label>
+                <Input type="number" value={inviteDelay} onChange={(e) => setInviteDelay(parseInt(e.target.value))} />
+                <p className="text-xs text-muted-foreground mt-1">Her üye daveti arasında beklenecek süre</p>
+              </div>
+              <div>
+                <Label>Her 10 davetten sonra bekleme (saniye)</Label>
+                <Input type="number" value={batchDelay} onChange={(e) => setBatchDelay(parseInt(e.target.value))} />
+                <p className="text-xs text-muted-foreground mt-1">10 üye ekledikten sonra beklenecek ek süre</p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <Label>Filtreler</Label>
+              <div className="flex gap-4">
+                <div className="flex items-center space-x-2"><Checkbox checked={filterBots} onCheckedChange={(c) => setFilterBots(c as boolean)} /><Label>Botları çıkar</Label></div>
+                <div className="flex items-center space-x-2"><Checkbox checked={filterAdmins} onCheckedChange={(c) => setFilterAdmins(c as boolean)} /><Label>Adminleri çıkar</Label></div>
+              </div>
+            </div>
+
+            <div className="bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+              <div className="flex gap-2">
+                <AlertCircle className="h-5 w-5 text-blue-600 dark:text-blue-400 flex-shrink-0 mt-0.5" />
+                <div className="space-y-2 text-sm">
+                  <p className="font-semibold text-blue-900 dark:text-blue-100">Flood Wait Hatası Hakkında</p>
+                  <p className="text-blue-800 dark:text-blue-200">
+                    Telegram'dan "flood wait" hatası alındığında (çok fazla istek), hesap otomatik olarak belirtilen süre boyunca bekletilir. 
+                    Bu süre dolana kadar hesap kullanılmaz ve diğer hesaplarla işleme devam edilir.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <Button onClick={handleCreateSession} className="w-full" size="lg">Oturumu Oluştur <ArrowRight className="ml-2" /></Button>
+          </CardContent></Card>
+        )}
       
       {stage === 'fetch' && (
         <Card><CardHeader><CardTitle>2. Üyeleri Çek</CardTitle></CardHeader><CardContent className="space-y-4">
@@ -280,7 +438,8 @@ const MemberScraping = () => {
             </ScrollArea>
           </div>
         </CardContent></Card>
-      )}
+        )}
+      </div>
     </div>
   );
 };

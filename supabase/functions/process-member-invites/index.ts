@@ -170,8 +170,8 @@ serve(async (req) => {
         if (!userEntity && member.access_hash) {
           try {
             const inputUser = new Api.InputUser({
-              userId: BigInt(member.user_id),
-              accessHash: BigInt(member.access_hash)
+              userId: member.user_id as any,
+              accessHash: member.access_hash as any
             });
             const result = await client.invoke(new Api.users.GetUsers({ id: [inputUser] }));
             userEntity = result[0];
@@ -362,11 +362,11 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error in process-member-invites:', error);
     
     return new Response(
-      JSON.stringify({ success: false, error: error.message }),
+      JSON.stringify({ success: false, error: error?.message || 'Unknown error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }

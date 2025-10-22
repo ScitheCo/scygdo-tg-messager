@@ -77,14 +77,15 @@ serve(async (req) => {
       throw new Error('Cannot find source group');
     }
 
-    console.log('Source group resolved:', sourceEntity.title);
+    const sourceEntityAny = sourceEntity as any;
+    console.log('Source group resolved:', sourceEntityAny.title);
 
     // Update session with source group info
     await supabase
       .from('scraping_sessions')
       .update({
-        source_group_id: sourceEntity.id.toString(),
-        source_group_title: sourceEntity.title
+        source_group_id: sourceEntityAny.id.toString(),
+        source_group_title: sourceEntityAny.title
       })
       .eq('id', session_id);
 
@@ -96,13 +97,13 @@ serve(async (req) => {
 
     while (hasMore) {
       try {
-        const result = await client.invoke(
+        const result: any = await client.invoke(
           new Api.channels.GetParticipants({
             channel: sourceEntity,
             filter: new Api.ChannelParticipantsSearch({ q: '' }),
             offset: offset,
             limit: limit,
-            hash: BigInt(0),
+            hash: 0 as any,
           })
         );
 
@@ -110,7 +111,7 @@ serve(async (req) => {
           hasMore = false;
         } else {
           allParticipants = allParticipants.concat(
-            result.users.map((user, idx) => {
+            result.users.map((user: any, idx: number) => {
               const participant = result.participants[idx];
               return {
                 user,
@@ -214,11 +215,11 @@ serve(async (req) => {
       { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
 
-  } catch (error) {
+  } catch (error: any) {
     console.error('Error in scrape-source-members:', error);
     
     return new Response(
-      JSON.stringify({ success: false, error: error.message }),
+      JSON.stringify({ success: false, error: error?.message || 'Unknown error' }),
       { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     );
   }
