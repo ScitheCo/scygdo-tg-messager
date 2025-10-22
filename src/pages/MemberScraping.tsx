@@ -1,102 +1,291 @@
-import { useState, useEffect, useRef } from 'react';
-import { Header } from '@/components/Header';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { Badge } from '@/components/ui/badge';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Progress } from '@/components/ui/progress';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/hooks/useAuth';
-import { toast } from 'sonner';
-import { Loader2, Play, Pause, StopCircle, Trash2, Download } from 'lucide-react';
-import { TelegramClient } from 'telegram';
-import { StringSession } from 'telegram/sessions';
-import { Api } from 'telegram/tl';
-import { Input } from '@/components/ui/input';
+import { useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { supabase } from "@/integrations/supabase/client";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import { Badge } from "@/components/ui/badge";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { toast } from "sonner";
+import { Play, Pause, StopCircle, ArrowRight, Download, Loader2 } from "lucide-react";
+import { useAuth } from "@/hooks/useAuth";
 
-const DEFAULT_DAILY_LIMIT = 50;
-const DEFAULT_INVITE_DELAY = 3;
-const DEFAULT_BATCH_DELAY = 40;
-
-type ScrapingStatus = 'idle' | 'running' | 'paused' | 'cancelled';
-
-interface ProgressState {
-  currentAccount: string;
-  currentAccountIndex: number;
-  totalAccounts: number;
-  membersAdded: number;
-  totalTarget: number;
-  currentLogId: string | null;
-}
-
-interface AddedMember {
-  id: string;
-  username: string;
-  firstName: string;
-  lastName: string;
-  accountUsed: string;
-  addedAt: string;
-}
-
-interface CompletionState {
-  isOpen: boolean;
-  addedMembers: AddedMember[];
-  totalAttempts: number;
-  successCount: number;
-  failedCount: number;
-  accountStats: Array<{
-    accountName: string;
-    targetSuccess: number;
-    achievedSuccess: number;
-    attempts: number;
-  }>;
-}
-
-export default function MemberScraping() {
-  const { user, isSuperAdmin } = useAuth();
-  const [showAllAccounts, setShowAllAccounts] = useState(true);
-  const [sourceGroupInput, setSourceGroupInput] = useState('');
-  const [targetGroupInput, setTargetGroupInput] = useState('');
-  const [sourceGroupInfo, setSourceGroupInfo] = useState<any>(null);
-  const [targetGroupInfo, setTargetGroupInfo] = useState<any>(null);
-  const [isVerifyingSource, setIsVerifyingSource] = useState(false);
-  const [isVerifyingTarget, setIsVerifyingTarget] = useState(false);
-  const [dailyLimit, setDailyLimit] = useState(DEFAULT_DAILY_LIMIT);
-  const [inviteDelay, setInviteDelay] = useState(DEFAULT_INVITE_DELAY);
-  const [batchDelay, setBatchDelay] = useState(DEFAULT_BATCH_DELAY);
+const MemberScraping = () => {
+  const { user } = useAuth();
+  const [stage, setStage] = useState<'configure' | 'fetch' | 'process'>('configure');
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sourceInput, setSourceInput] = useState("");
+  const [targetInput, setTargetInput] = useState("");
+  const [scannerAccountId, setScannerAccountId] = useState("");
+  const [selectedInviterIds, setSelectedInviterIds] = useState<string[]>([]);
+  const [dailyLimit, setDailyLimit] = useState(50);
+  const [inviteDelay, setInviteDelay] = useState(60);
+  const [batchDelay, setBatchDelay] = useState(180);
+  const [filterBots, setFilterBots] = useState(true);
+  const [filterAdmins, setFilterAdmins] = useState(true);
+  const [isFetching, setIsFetching] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
-  // Progress control states
-  const [scrapingStatus, setScrapingStatus] = useState<ScrapingStatus>('idle');
-  const [currentProgress, setCurrentProgress] = useState<ProgressState>({
-    currentAccount: '',
-    currentAccountIndex: 0,
-    totalAccounts: 0,
-    membersAdded: 0,
-    totalTarget: 0,
-    currentLogId: null,
+  const { data: accounts } = useQuery({
+    queryKey: ["telegram-accounts"],
+    queryFn: async () => {
+      const { data, error } = await supabase.from("telegram_accounts").select("*").eq("is_active", true).order("created_at");
+      if (error) throw error;
+      return data;
+    },
   });
   
-  // Completion dialog state
-  const [completedScraping, setCompletedScraping] = useState<CompletionState>({
-    isOpen: false,
-    addedMembers: [],
-    totalAttempts: 0,
-    successCount: 0,
-    failedCount: 0,
-    accountStats: [],
+  const { data: session, refetch: refetchSession } = useQuery({
+    queryKey: ["scraping-session", sessionId],
+    queryFn: async () => {
+      if (!sessionId) return null;
+      const { data, error } = await supabase.from("scraping_sessions").select("*").eq("id", sessionId).single();
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!sessionId,
+    refetchInterval: session?.status === 'running' ? 3000 : false,
   });
   
-  // Use ref to track status for async operations (mutable across function calls)
-  const statusRef = useRef<ScrapingStatus>('idle' as ScrapingStatus);
+  const { data: members, refetch: refetchMembers } = useQuery({
+    queryKey: ["scraped-members", sessionId],
+    queryFn: async () => {
+      if (!sessionId) return [];
+      const { data, error } = await supabase.from("scraped_members").select("*").eq("session_id", sessionId).order("sequence_number");
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!sessionId && stage !== 'configure',
+  });
   
-  // Sync statusRef when scrapingStatus changes
+  const { data: sessionAccounts, refetch: refetchSessionAccounts } = useQuery({
+    queryKey: ["session-accounts", sessionId],
+    queryFn: async () => {
+      if (!sessionId) return [];
+      const { data, error } = await supabase.from("session_accounts").select("*, telegram_accounts(name, phone_number)").eq("session_id", sessionId);
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!sessionId && stage === 'process',
+  });
+  
   useEffect(() => {
-    statusRef.current = scrapingStatus;
-  }, [scrapingStatus]);
+    if (!sessionId) return;
+    const channel = supabase.channel(`session:${sessionId}`)
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'scraping_sessions', filter: `id=eq.${sessionId}` }, () => refetchSession())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'scraped_members', filter: `session_id=eq.${sessionId}` }, () => refetchMembers())
+      .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'session_accounts', filter: `session_id=eq.${sessionId}` }, () => refetchSessionAccounts())
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [sessionId]);
+  
+  const handleCreateSession = async () => {
+    if (!sourceInput || !targetInput || !scannerAccountId || selectedInviterIds.length === 0) {
+      toast.error("Lütfen tüm alanları doldurun");
+      return;
+    }
+    try {
+      const { data: newSession, error: sessionError } = await supabase.from("scraping_sessions").insert({
+        created_by: user?.id, source_group_input: sourceInput, target_group_input: targetInput,
+        settings: { daily_limit: dailyLimit, invite_delay: inviteDelay, batch_delay: batchDelay, filter_bots: filterBots, filter_admins: filterAdmins },
+        status: 'configuring'
+      }).select().single();
+      if (sessionError) throw sessionError;
+      const accountInserts = selectedInviterIds.map(accountId => ({ session_id: newSession.id, account_id: accountId }));
+      const { error: accountsError } = await supabase.from("session_accounts").insert(accountInserts);
+      if (accountsError) throw accountsError;
+      setSessionId(newSession.id);
+      setStage('fetch');
+      toast.success("Oturum oluşturuldu");
+    } catch (error: any) {
+      toast.error(error.message);
+    }
+  };
+  
+  const handleFetchMembers = async () => {
+    if (!sessionId || !scannerAccountId) return;
+    setIsFetching(true);
+    try {
+      const { data, error } = await supabase.functions.invoke('scrape-source-members', {
+        body: { session_id: sessionId, scanner_account_id: scannerAccountId, filters: { exclude_bots: filterBots, exclude_admins: filterAdmins } }
+      });
+      if (error) throw error;
+      toast.success(`${data.total_queued} üye kuyruğa eklendi`);
+      setStage('process');
+      refetchSession();
+      refetchMembers();
+    } catch (error: any) {
+      toast.error(error.message);
+    } finally {
+      setIsFetching(false);
+    }
+  };
+  
+  const handleStart = async () => {
+    if (!sessionId) return;
+    await supabase.from('scraping_sessions').update({ status: 'running' }).eq('id', sessionId);
+    setIsProcessing(true);
+    startPolling();
+  };
+  
+  const handlePause = async () => {
+    if (!sessionId) return;
+    await supabase.from('scraping_sessions').update({ status: 'paused' }).eq('id', sessionId);
+    stopPolling();
+    setIsProcessing(false);
+  };
+  
+  const handleResume = async () => {
+    if (!sessionId) return;
+    await refetchSessionAccounts();
+    await supabase.from('scraping_sessions').update({ status: 'running' }).eq('id', sessionId);
+    setIsProcessing(true);
+    startPolling();
+  };
+  
+  const handleCancel = async () => {
+    if (!sessionId) return;
+    await supabase.from('scraping_sessions').update({ status: 'cancelled' }).eq('id', sessionId);
+    stopPolling();
+    setIsProcessing(false);
+    toast.success("İşlem iptal edildi");
+  };
+  
+  const startPolling = () => {
+    if (pollingIntervalRef.current) return;
+    pollingIntervalRef.current = setInterval(async () => {
+      if (!sessionId) return;
+      try {
+        const { data, error } = await supabase.functions.invoke('process-member-invites', { body: { session_id: sessionId, batch_size: 10 } });
+        if (error) throw error;
+        if (data?.session_status === 'paused') { toast.warning("Tüm hesapların günlük limiti doldu"); stopPolling(); setIsProcessing(false); }
+        if (data?.session_status === 'completed') { toast.success("Tüm üyeler işlendi"); stopPolling(); setIsProcessing(false); }
+      } catch (error: any) {
+        console.error('Polling error:', error);
+      }
+    }, 5000);
+  };
+  
+  const stopPolling = () => {
+    if (pollingIntervalRef.current) { clearInterval(pollingIntervalRef.current); pollingIntervalRef.current = null; }
+  };
+  
+  useEffect(() => { return () => stopPolling(); }, []);
+  
+  const getStatusBadge = (status: string) => {
+    const variants: Record<string, any> = {
+      queued: { variant: "secondary", text: "Sırada" },
+      processing: { variant: "default", text: "İşleniyor" },
+      success: { variant: "default", text: "Başarılı", className: "bg-green-500" },
+      failed: { variant: "destructive", text: "Başarısız" },
+      skipped: { variant: "outline", text: "Atlandı" }
+    };
+    const config = variants[status] || variants.queued;
+    return <Badge variant={config.variant} className={config.className}>{config.text}</Badge>;
+  };
+  
+  const progressPercent = session ? (session.total_processed / session.total_in_queue) * 100 : 0;
+  
+  return (
+    <div className="container mx-auto p-6 space-y-6">
+      <h1 className="text-3xl font-bold">Üye Ekleme Sistemi V2</h1>
+      
+      {stage === 'configure' && (
+        <Card><CardHeader><CardTitle>1. Yapılandırma</CardTitle></CardHeader><CardContent className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div><Label>Kaynak Grup</Label><Input value={sourceInput} onChange={(e) => setSourceInput(e.target.value)} placeholder="@grupadi" /></div>
+            <div><Label>Hedef Grup</Label><Input value={targetInput} onChange={(e) => setTargetInput(e.target.value)} placeholder="@grupadi" /></div>
+          </div>
+          <div><Label>Tarayıcı Hesap</Label>
+            <Select value={scannerAccountId} onValueChange={setScannerAccountId}>
+              <SelectTrigger><SelectValue placeholder="Hesap seçin" /></SelectTrigger>
+              <SelectContent>{accounts?.map((acc) => <SelectItem key={acc.id} value={acc.id}>{acc.name || acc.phone_number}</SelectItem>)}</SelectContent>
+            </Select>
+          </div>
+          <div><Label>Davet Hesapları</Label>
+            <div className="border rounded-lg p-4 space-y-2 max-h-48 overflow-auto">
+              {accounts?.map((acc) => (
+                <div key={acc.id} className="flex items-center space-x-2">
+                  <Checkbox checked={selectedInviterIds.includes(acc.id)} onCheckedChange={(checked) => {
+                    if (checked) setSelectedInviterIds([...selectedInviterIds, acc.id]);
+                    else setSelectedInviterIds(selectedInviterIds.filter(id => id !== acc.id));
+                  }} />
+                  <label className="text-sm">{acc.name || acc.phone_number}</label>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div><Label>Günlük Limit</Label><Input type="number" value={dailyLimit} onChange={(e) => setDailyLimit(parseInt(e.target.value))} /></div>
+            <div><Label>Davet Gecikmesi (sn)</Label><Input type="number" value={inviteDelay} onChange={(e) => setInviteDelay(parseInt(e.target.value))} /></div>
+            <div><Label>Parti Gecikmesi (sn)</Label><Input type="number" value={batchDelay} onChange={(e) => setBatchDelay(parseInt(e.target.value))} /></div>
+          </div>
+          <div className="flex gap-4">
+            <div className="flex items-center space-x-2"><Checkbox checked={filterBots} onCheckedChange={(c) => setFilterBots(c as boolean)} /><Label>Botları çıkar</Label></div>
+            <div className="flex items-center space-x-2"><Checkbox checked={filterAdmins} onCheckedChange={(c) => setFilterAdmins(c as boolean)} /><Label>Adminleri çıkar</Label></div>
+          </div>
+          <Button onClick={handleCreateSession} className="w-full" size="lg">Oturumu Oluştur <ArrowRight className="ml-2" /></Button>
+        </CardContent></Card>
+      )}
+      
+      {stage === 'fetch' && (
+        <Card><CardHeader><CardTitle>2. Üyeleri Çek</CardTitle></CardHeader><CardContent className="space-y-4">
+          {session && <div className="space-y-2">
+            <p><strong>Kaynak:</strong> {session.source_group_input}</p>
+            <p><strong>Hedef:</strong> {session.target_group_input}</p>
+            {session.total_members_fetched > 0 && <p><strong>İlerleme:</strong> {session.total_members_fetched} üye çekildi</p>}
+          </div>}
+          <Button onClick={handleFetchMembers} disabled={isFetching} className="w-full" size="lg">
+            {isFetching ? <><Loader2 className="mr-2 animate-spin" />Üyeler çekiliyor...</> : <><Download className="mr-2" />Üyeleri Çek</>}
+          </Button>
+        </CardContent></Card>
+      )}
+      
+      {stage === 'process' && session && (
+        <Card><CardHeader><CardTitle>3. Üye Ekleme İşlemi</CardTitle></CardHeader><CardContent className="space-y-4">
+          <div className="space-y-2">
+            <div className="flex justify-between text-sm"><span>İşlenen: {session.total_processed} / {session.total_in_queue}</span><span>{progressPercent.toFixed(1)}%</span></div>
+            <Progress value={progressPercent} />
+            <div className="flex justify-between text-sm"><span className="text-green-600">Başarılı: {session.total_success}</span><span className="text-red-600">Başarısız: {session.total_failed}</span></div>
+          </div>
+          <div className="flex gap-2">
+            {session.status === 'ready' && <Button onClick={handleStart} className="flex-1"><Play className="mr-2" /> Başlat</Button>}
+            {session.status === 'running' && <Button onClick={handlePause} variant="secondary" className="flex-1"><Pause className="mr-2" /> Duraklat</Button>}
+            {session.status === 'paused' && <Button onClick={handleResume} className="flex-1"><Play className="mr-2" /> Devam Et</Button>}
+            <Button onClick={handleCancel} variant="destructive" className="flex-1"><StopCircle className="mr-2" /> İptal</Button>
+          </div>
+          {sessionAccounts && sessionAccounts.length > 0 && (
+            <div className="border rounded-lg p-4"><h4 className="font-semibold mb-2">Hesap Durumları</h4>
+              <div className="space-y-1">{sessionAccounts.map((acc: any) => (
+                <div key={acc.id} className="flex justify-between text-sm">
+                  <span>{acc.telegram_accounts?.name || acc.telegram_accounts?.phone_number}</span>
+                  <span>{acc.is_active ? <Badge className="bg-green-500">Aktif ({acc.added_today}/{dailyLimit})</Badge> : <Badge variant="secondary">Limit Doldu</Badge>}</span>
+                </div>
+              ))}</div>
+            </div>
+          )}
+          <div className="border rounded-lg"><div className="p-4 border-b"><h4 className="font-semibold">Üye Listesi</h4></div>
+            <ScrollArea className="h-[400px]">
+              <Table><TableHeader><TableRow><TableHead className="w-20">Sıra</TableHead><TableHead>Üye ID</TableHead><TableHead>Kullanıcı Adı</TableHead><TableHead className="w-32">Durum</TableHead></TableRow></TableHeader>
+                <TableBody>{members?.map((member: any) => (
+                  <TableRow key={member.id}><TableCell>{member.sequence_number}</TableCell><TableCell className="font-mono text-xs">{member.user_id}</TableCell><TableCell>{member.username ? `@${member.username}` : '-'}</TableCell><TableCell>{getStatusBadge(member.status)}</TableCell></TableRow>
+                ))}</TableBody>
+              </Table>
+            </ScrollArea>
+          </div>
+        </CardContent></Card>
+      )}
+    </div>
+  );
+};
+
+export default MemberScraping;
 
   // Fetch accounts based on filter
   const { data: accounts, refetch: refetchAccounts } = useQuery({

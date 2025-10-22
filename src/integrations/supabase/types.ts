@@ -179,6 +179,212 @@ export type Database = {
         }
         Relationships: []
       }
+      scraped_members: {
+        Row: {
+          access_hash: number | null
+          created_at: string
+          error_reason: string | null
+          first_name: string | null
+          id: string
+          is_admin: boolean
+          is_bot: boolean
+          last_name: string | null
+          phone: string | null
+          processed_at: string | null
+          processed_by_account_id: string | null
+          retry_count: number
+          sequence_number: number
+          session_id: string
+          status: string
+          user_id: number
+          username: string | null
+        }
+        Insert: {
+          access_hash?: number | null
+          created_at?: string
+          error_reason?: string | null
+          first_name?: string | null
+          id?: string
+          is_admin?: boolean
+          is_bot?: boolean
+          last_name?: string | null
+          phone?: string | null
+          processed_at?: string | null
+          processed_by_account_id?: string | null
+          retry_count?: number
+          sequence_number: number
+          session_id: string
+          status?: string
+          user_id: number
+          username?: string | null
+        }
+        Update: {
+          access_hash?: number | null
+          created_at?: string
+          error_reason?: string | null
+          first_name?: string | null
+          id?: string
+          is_admin?: boolean
+          is_bot?: boolean
+          last_name?: string | null
+          phone?: string | null
+          processed_at?: string | null
+          processed_by_account_id?: string | null
+          retry_count?: number
+          sequence_number?: number
+          session_id?: string
+          status?: string
+          user_id?: number
+          username?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scraped_members_processed_by_account_id_fkey"
+            columns: ["processed_by_account_id"]
+            isOneToOne: false
+            referencedRelation: "telegram_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "scraped_members_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "scraping_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      scraping_sessions: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          fetched_at: string | null
+          id: string
+          settings: Json
+          source_group_id: number | null
+          source_group_input: string
+          source_group_title: string | null
+          status: string
+          target_group_id: number | null
+          target_group_input: string
+          target_group_title: string | null
+          total_failed: number
+          total_filtered_out: number
+          total_in_queue: number
+          total_members_fetched: number
+          total_processed: number
+          total_success: number
+          updated_at: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          fetched_at?: string | null
+          id?: string
+          settings?: Json
+          source_group_id?: number | null
+          source_group_input: string
+          source_group_title?: string | null
+          status?: string
+          target_group_id?: number | null
+          target_group_input: string
+          target_group_title?: string | null
+          total_failed?: number
+          total_filtered_out?: number
+          total_in_queue?: number
+          total_members_fetched?: number
+          total_processed?: number
+          total_success?: number
+          updated_at?: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          fetched_at?: string | null
+          id?: string
+          settings?: Json
+          source_group_id?: number | null
+          source_group_input?: string
+          source_group_title?: string | null
+          status?: string
+          target_group_id?: number | null
+          target_group_input?: string
+          target_group_title?: string | null
+          total_failed?: number
+          total_filtered_out?: number
+          total_in_queue?: number
+          total_members_fetched?: number
+          total_processed?: number
+          total_success?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "scraping_sessions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      session_accounts: {
+        Row: {
+          account_id: string
+          added_today: number
+          created_at: string
+          flood_wait_until: string | null
+          id: string
+          is_active: boolean
+          last_activity_at: string | null
+          session_id: string
+          total_attempts: number
+          total_success: number
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          added_today?: number
+          created_at?: string
+          flood_wait_until?: string | null
+          id?: string
+          is_active?: boolean
+          last_activity_at?: string | null
+          session_id: string
+          total_attempts?: number
+          total_success?: number
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          added_today?: number
+          created_at?: string
+          flood_wait_until?: string | null
+          id?: string
+          is_active?: boolean
+          last_activity_at?: string | null
+          session_id?: string
+          total_attempts?: number
+          total_success?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "session_accounts_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "telegram_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "session_accounts_session_id_fkey"
+            columns: ["session_id"]
+            isOneToOne: false
+            referencedRelation: "scraping_sessions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       telegram_accounts: {
         Row: {
           api_credential_id: string | null
@@ -318,10 +524,7 @@ export type Database = {
         }
         Returns: boolean
       }
-      user_owns_account: {
-        Args: { _account_id: string }
-        Returns: boolean
-      }
+      user_owns_account: { Args: { _account_id: string }; Returns: boolean }
     }
     Enums: {
       app_role: "Standart" | "Super Admin"
