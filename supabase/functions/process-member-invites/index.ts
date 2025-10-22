@@ -1,8 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.75.0";
-import { TelegramClient } from "npm:telegram@2.26.22";
-import { StringSession } from "npm:telegram@2.26.22/sessions/index.js";
-import { Api } from "npm:telegram@2.26.22";
+import { TelegramClient, Api } from "npm:telegram@2.26.22";
+import { StringSession } from "npm:telegram@2.26.22/sessions";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -178,7 +177,8 @@ serve(async (req) => {
             } else {
               targetEntity = await client.getEntity(parseInt(session.target_group_input));
             }
-            console.log(`🎯 Target group resolved: ${targetEntity.title || 'Unknown'}`);
+            const channelInfo = targetEntity as any;
+            console.log(`🎯 Target group resolved: ${channelInfo.title || 'Unknown'}`);
           } catch (error: any) {
             console.error('❌ Cannot resolve target group:', error.message);
             throw new Error('Cannot resolve target group');
@@ -194,8 +194,9 @@ serve(async (req) => {
             })
           );
 
-          const canInvite = participant.participant?.adminRights?.inviteUsers || 
-                           participant.participant?.className === 'ChannelParticipantCreator';
+          const participantData = participant.participant as any;
+          const canInvite = participantData?.adminRights?.inviteUsers || 
+                           participantData?.className === 'ChannelParticipantCreator';
 
           if (!canInvite) {
             console.log(`❌ Account ${account.phone_number} lacks invite permission`);
@@ -353,7 +354,7 @@ serve(async (req) => {
         try {
           await client.invoke(
             new Api.channels.GetParticipant({
-              channel: targetEntity,
+              channel: targetEntity as any,
               participant: userEntity
             })
           );
@@ -392,7 +393,7 @@ serve(async (req) => {
         try {
           await client.invoke(
             new Api.channels.InviteToChannel({
-              channel: targetEntity,
+              channel: targetEntity as any,
               users: [userEntity]
             })
           );
