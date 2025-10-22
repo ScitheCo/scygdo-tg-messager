@@ -145,11 +145,12 @@ const MemberScraping = () => {
       }
       
       try {
-        // Session'u güncelle
+        // Session'u güncelle ve status'u ready'ye çek
         await supabase
           .from("scraping_sessions")
           .update({
             target_group_input: targetInput,
+            status: 'ready',
             settings: { 
               daily_limit: dailyLimit, 
               invite_delay: inviteDelay, 
@@ -167,16 +168,34 @@ const MemberScraping = () => {
           .delete()
           .eq("session_id", selectedExistingSessionId);
         
-        // Yeni hesapları ekle
+        // Yeni hesapları ekle ve limitleri sıfırla
         const accountInserts = selectedInviterIds.map(accountId => ({ 
           session_id: selectedExistingSessionId, 
-          account_id: accountId 
+          account_id: accountId,
+          is_active: true,
+          added_today: 0,
+          total_attempts: 0,
+          total_success: 0,
+          flood_wait_until: null,
+          last_activity_at: null
         }));
         await supabase.from("session_accounts").insert(accountInserts);
         
+        // Hesapların günlük limitlerini de sıfırla (bugün için yeni başlangıç)
+        for (const accountId of selectedInviterIds) {
+          await supabase
+            .from("account_daily_limits")
+            .upsert({
+              account_id: accountId,
+              date: new Date().toISOString().split('T')[0],
+              members_added_today: 0,
+              last_used_at: null
+            });
+        }
+        
         setSessionId(selectedExistingSessionId);
         setStage('process');
-        toast.success("Session güncellendi, devam ediyoruz!");
+        toast.success("Session güncellendi, başlamaya hazır!");
       } catch (error: any) {
         toast.error("Session güncellenirken hata: " + error.message);
       }
