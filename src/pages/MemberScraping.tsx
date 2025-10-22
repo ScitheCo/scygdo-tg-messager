@@ -16,6 +16,9 @@ import { toast } from "sonner";
 import { Play, Pause, StopCircle, ArrowRight, Download, Loader2, CheckCircle, XCircle, AlertCircle } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Header } from "@/components/Header";
+import { TelegramClient } from "telegram";
+import { StringSession } from "telegram/sessions";
+import { Api } from "telegram/tl";
 
 const MemberScraping = () => {
   const { user } = useAuth();
@@ -123,31 +126,188 @@ const MemberScraping = () => {
     if (!sessionId || !scannerAccountId) return;
     
     setIsFetching(true);
-    toast.info('Üyeler çekiliyor, lütfen bekleyin...');
+    
+    // Session'u fetching_members durumuna al
+    await supabase
+      .from('scraping_sessions')
+      .update({ status: 'fetching_members', updated_at: new Date().toISOString() })
+      .eq('id', sessionId);
+    
+    const loadingToast = toast.loading('Tarayıcınızdan Telegram\'a bağlanılıyor...');
 
     try {
-      const { data, error } = await supabase.functions.invoke('scrape-source-members', {
-        body: {
-          session_id: sessionId,
-          scanner_account_id: scannerAccountId,
-          filters: {
-            exclude_bots: filterBots,
-            exclude_admins: filterAdmins
-          }
-        }
-      });
+      // Scanner hesabı bilgilerini al
+      const { data: account, error: accountError } = await supabase
+        .from('telegram_accounts')
+        .select('*, telegram_api_credentials(*)')
+        .eq('id', scannerAccountId)
+        .single();
 
-      if (error) throw error;
-
-      if (data?.success) {
-        toast.success(`${data.total_queued} üye başarıyla çekildi!`);
-        setStage('process');
-      } else {
-        throw new Error(data?.error || 'Bilinmeyen hata');
+      if (accountError || !account) {
+        throw new Error('Scanner hesabı bulunamadı');
       }
+
+      toast.loading('Telegram client başlatılıyor...', { id: loadingToast });
+
+      // Telegram client'ı başlat
+      const stringSession = new StringSession(account.session_string || '');
+      const client = new TelegramClient(
+        stringSession,
+        parseInt(account.telegram_api_credentials.api_id),
+        account.telegram_api_credentials.api_hash,
+        { 
+          connectionRetries: 5,
+          useWSS: true
+        }
+      );
+
+      // Bağlan
+      await client.connect();
+      toast.loading('Telegram\'a bağlandı, kaynak grup çözümleniyor...', { id: loadingToast });
+
+      // Kaynak grubu çözümle
+      let sourceEntity;
+      try {
+        if (sourceInput.startsWith('@') || !sourceInput.match(/^\-?\d+$/)) {
+          sourceEntity = await client.getEntity(sourceInput);
+        } else {
+          sourceEntity = await client.getEntity(parseInt(sourceInput));
+        }
+      } catch (error) {
+        throw new Error('Kaynak grup bulunamadı. Grup ID veya kullanıcı adını kontrol edin.');
+      }
+
+      const sourceEntityAny = sourceEntity as any;
+      console.log('Kaynak grup:', sourceEntityAny.title);
+
+      // Session'a kaynak grup bilgisini kaydet
+      await supabase
+        .from('scraping_sessions')
+        .update({
+          source_group_id: sourceEntityAny.id?.toString(),
+          source_group_title: sourceEntityAny.title
+        })
+        .eq('id', sessionId);
+
+      toast.loading(`${sourceEntityAny.title} grubundan üyeler çekiliyor...`, { id: loadingToast });
+
+      // Üyeleri çek
+      let allParticipants: any[] = [];
+      let offset = 0;
+      const limit = 100;
+      let hasMore = true;
+      let fetchedCount = 0;
+
+      while (hasMore) {
+        try {
+          const result: any = await client.invoke(
+            new Api.channels.GetParticipants({
+              channel: sourceEntity,
+              filter: new Api.ChannelParticipantsSearch({ q: '' }),
+              offset: offset,
+              limit: limit,
+              hash: 0 as any,
+            })
+          );
+
+          if (result.users.length === 0) {
+            hasMore = false;
+          } else {
+            const batch = result.users.map((user: any, idx: number) => {
+              const participant = result.participants[idx];
+              return {
+                user,
+                participant,
+                isAdmin: participant.className === 'ChannelParticipantAdmin' || 
+                        participant.className === 'ChannelParticipantCreator'
+              };
+            });
+            
+            allParticipants = allParticipants.concat(batch);
+            offset += result.users.length;
+            fetchedCount = offset;
+            
+            toast.loading(`${fetchedCount} üye çekildi...`, { id: loadingToast });
+            
+            // Progress güncelle
+            await supabase
+              .from('scraping_sessions')
+              .update({ total_members_fetched: fetchedCount })
+              .eq('id', sessionId);
+
+            // Rate limiting
+            await new Promise(resolve => setTimeout(resolve, 1500));
+          }
+        } catch (error: any) {
+          console.error('Batch çekme hatası:', error);
+          hasMore = false;
+        }
+      }
+
+      await client.disconnect();
+
+      toast.loading('Üyeler filtreleniyor ve kaydediliyor...', { id: loadingToast });
+
+      // Filtreleme ve kaydetme
+      let sequenceNumber = 1;
+      let filteredCount = 0;
+      let queuedCount = 0;
+
+      for (const item of allParticipants) {
+        const user = item.user;
+        
+        // Filtreleme
+        if (filterBots && user.bot) {
+          filteredCount++;
+          continue;
+        }
+        
+        if (filterAdmins && item.isAdmin) {
+          filteredCount++;
+          continue;
+        }
+
+        // Supabase'e kaydet
+        const { error: insertError } = await supabase
+          .from('scraped_members')
+          .insert({
+            session_id: sessionId,
+            sequence_number: sequenceNumber++,
+            user_id: user.id?.toString(),
+            username: user.username || null,
+            first_name: user.firstName || null,
+            last_name: user.lastName || null,
+            access_hash: user.accessHash?.toString() || null,
+            phone: user.phone || null,
+            is_bot: user.bot || false,
+            is_admin: item.isAdmin,
+            status: 'queued'
+          });
+
+        if (!insertError) {
+          queuedCount++;
+        }
+      }
+
+      // Final güncelleme
+      await supabase
+        .from('scraping_sessions')
+        .update({
+          status: 'ready',
+          total_members_fetched: allParticipants.length,
+          total_filtered_out: filteredCount,
+          total_in_queue: queuedCount,
+          fetched_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', sessionId);
+
+      toast.success(`${queuedCount} üye başarıyla çekildi! (${filteredCount} filtrelendi)`, { id: loadingToast });
+      setStage('process');
+      
     } catch (error: any) {
       console.error('Fetch error:', error);
-      toast.error('Hata: ' + (error.message || 'Bilinmeyen hata'));
+      toast.error('Hata: ' + (error.message || 'Bilinmeyen hata'), { id: loadingToast });
       
       await supabase
         .from('scraping_sessions')
