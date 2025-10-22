@@ -123,7 +123,7 @@ const MemberScraping = () => {
     if (!sessionId || !scannerAccountId) return;
     
     setIsFetching(true);
-    toast.loading('Üyeler çekiliyor...');
+    toast.info('Üyeler çekiliyor, lütfen bekleyin...');
 
     try {
       const { data, error } = await supabase.functions.invoke('scrape-source-members', {

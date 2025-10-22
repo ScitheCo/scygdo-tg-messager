@@ -134,16 +134,28 @@ serve(async (req) => {
       }
 
       try {
-        // Connect to Telegram
+        // Connect to Telegram with improved settings
         const stringSession = new StringSession(account.session_string || '');
         const client = new TelegramClient(
           stringSession,
           parseInt(account.telegram_api_credentials.api_id),
           account.telegram_api_credentials.api_hash,
-          { connectionRetries: 2 }
+          { 
+            connectionRetries: 5,
+            retryDelay: 2000,
+            autoReconnect: true,
+            requestRetries: 3
+          }
         );
 
-        await client.connect();
+        // Connect with timeout
+        const connectPromise = client.connect();
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Connection timeout')), 20000)
+        );
+        
+        await Promise.race([connectPromise, timeoutPromise]);
+        console.log('Connected to Telegram for member processing');
 
         // Resolve target channel
         let targetEntity;

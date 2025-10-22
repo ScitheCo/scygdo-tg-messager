@@ -52,17 +52,28 @@ serve(async (req) => {
       throw new Error('Scanner account not found');
     }
 
-    // Initialize Telegram client
+    // Initialize Telegram client with improved settings
     const stringSession = new StringSession(account.session_string || '');
     const client = new TelegramClient(
       stringSession,
       parseInt(account.telegram_api_credentials.api_id),
       account.telegram_api_credentials.api_hash,
-      { connectionRetries: 3 }
+      { 
+        connectionRetries: 5,
+        retryDelay: 2000,
+        autoReconnect: true,
+        requestRetries: 3
+      }
     );
 
-    await client.connect();
-    console.log('Telegram client connected');
+    // Connect with timeout
+    const connectPromise = client.connect();
+    const timeoutPromise = new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('Connection timeout')), 30000)
+    );
+    
+    await Promise.race([connectPromise, timeoutPromise]);
+    console.log('Telegram client connected successfully');
 
     // Resolve source group
     let sourceEntity;
@@ -89,15 +100,20 @@ serve(async (req) => {
       })
       .eq('id', session_id);
 
-    // Fetch all participants with pagination
+    // Fetch all participants with pagination and improved error handling
     let allParticipants: any[] = [];
     let offset = 0;
-    const limit = 200;
+    const limit = 100; // Reduced batch size for stability
     let hasMore = true;
+    let consecutiveErrors = 0;
+    const MAX_CONSECUTIVE_ERRORS = 3;
 
-    while (hasMore) {
+    while (hasMore && consecutiveErrors < MAX_CONSECUTIVE_ERRORS) {
       try {
-        const result: any = await client.invoke(
+        console.log(`Fetching batch at offset ${offset}...`);
+        
+        // Add timeout for each batch
+        const fetchPromise = client.invoke(
           new Api.channels.GetParticipants({
             channel: sourceEntity,
             filter: new Api.ChannelParticipantsSearch({ q: '' }),
@@ -106,8 +122,15 @@ serve(async (req) => {
             hash: 0 as any,
           })
         );
+        
+        const timeoutPromise = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Batch fetch timeout')), 20000)
+        );
+        
+        const result: any = await Promise.race([fetchPromise, timeoutPromise]);
 
         if (result.users.length === 0) {
+          console.log('No more users found, ending fetch');
           hasMore = false;
         } else {
           allParticipants = allParticipants.concat(
@@ -122,6 +145,7 @@ serve(async (req) => {
             })
           );
           offset += result.users.length;
+          consecutiveErrors = 0; // Reset error counter on success
           
           console.log(`Fetched ${offset} members so far...`);
           
@@ -132,11 +156,19 @@ serve(async (req) => {
             .eq('id', session_id);
         }
 
-        // Rate limiting
-        await new Promise(resolve => setTimeout(resolve, 1000));
+        // Rate limiting - longer delay for stability
+        await new Promise(resolve => setTimeout(resolve, 2000));
       } catch (error) {
-        console.error('Error fetching participants batch:', error);
-        hasMore = false;
+        consecutiveErrors++;
+        console.error(`Error fetching batch (attempt ${consecutiveErrors}/${MAX_CONSECUTIVE_ERRORS}):`, error);
+        
+        if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
+          console.error('Max consecutive errors reached, stopping fetch');
+          hasMore = false;
+        } else {
+          // Wait before retry
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        }
       }
     }
 
