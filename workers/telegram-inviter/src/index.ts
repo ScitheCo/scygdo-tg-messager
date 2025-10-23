@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
