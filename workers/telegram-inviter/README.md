@@ -53,6 +53,68 @@ npm run build
 npm start
 ```
 
+### PM2 ile Çalıştırma (Kendi Bilgisayarınızda - ÖNERİLEN)
+
+PM2, worker'ınızı sürekli çalışır durumda tutan ve bilgisayar yeniden başlatıldığında otomatik başlatan bir process manager'dır.
+
+#### 1. PM2'yi Global Olarak Kurun
+
+```bash
+npm install -g pm2
+```
+
+#### 2. Projeyi Build Edin
+
+```bash
+npm install
+npm run build
+```
+
+#### 3. PM2 ile Başlatın
+
+```bash
+pm2 start dist/index.js --name telegram-inviter
+```
+
+#### 4. Bilgisayar Açılışında Otomatik Başlat
+
+```bash
+pm2 startup
+pm2 save
+```
+
+Bu komut, bilgisayarınız her açıldığında worker'ın otomatik olarak başlamasını sağlar.
+
+#### Faydalı PM2 Komutları
+
+```bash
+# Logları görüntüle (CTRL+C ile çıkın)
+pm2 logs telegram-inviter
+
+# Durumu kontrol et
+pm2 status
+
+# Worker'ı yeniden başlat
+pm2 restart telegram-inviter
+
+# Worker'ı durdur
+pm2 stop telegram-inviter
+
+# PM2'den tamamen kaldır
+pm2 delete telegram-inviter
+
+# Tüm PM2 process'lerini görüntüle
+pm2 list
+```
+
+#### .env Dosyasını Güncellerseniz
+
+`.env` dosyasını değiştirdikten sonra:
+
+```bash
+pm2 restart telegram-inviter
+```
+
 ## Deploy
 
 ### Render.com (Önerilen)
