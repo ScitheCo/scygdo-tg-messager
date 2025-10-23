@@ -16,6 +16,7 @@ import { toast } from "sonner";
 import { Play, Pause, StopCircle, ArrowRight, Download, Loader2, CheckCircle, XCircle, AlertCircle } from "lucide-react";
 import { useAuth } from "@/hooks/useAuth";
 import { Header } from "@/components/Header";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { TelegramClient } from "telegram";
 import { StringSession } from "telegram/sessions";
 import { Api } from "telegram/tl";
@@ -126,6 +127,28 @@ const MemberScraping = () => {
     },
     enabled: !!sessionId && stage === 'process',
   });
+
+  // Worker heartbeat kontrolü
+  const { data: workerHeartbeat } = useQuery({
+    queryKey: ["worker-heartbeat"],
+    queryFn: async () => {
+      const { data, error } = await supabase
+        .from("worker_heartbeats")
+        .select("*")
+        .eq("worker_id", "telegram-inviter")
+        .order("last_seen", { ascending: false })
+        .limit(1)
+        .single();
+      
+      if (error && error.code !== 'PGRST116') throw error; // PGRST116 = no rows
+      return data;
+    },
+    refetchInterval: 30000, // Her 30 saniyede kontrol et
+  });
+
+  // Worker online mı kontrol et (son 2 dakika içinde heartbeat var mı?)
+  const isWorkerOnline = workerHeartbeat && 
+    (new Date().getTime() - new Date(workerHeartbeat.last_seen).getTime()) < 120000;
   
   useEffect(() => {
     if (!sessionId) return;
@@ -973,6 +996,26 @@ const MemberScraping = () => {
             </Button>
           </div>
         </CardHeader><CardContent className="space-y-4">
+          
+          {!isWorkerOnline && (
+            <Alert variant="destructive">
+              <AlertCircle className="h-4 w-4" />
+              <AlertTitle>Worker Çevrimdışı</AlertTitle>
+              <AlertDescription>
+                Davet işlemleri harici worker tarafından yürütülüyor. Lütfen worker'ı başlatın.
+              </AlertDescription>
+            </Alert>
+          )}
+
+          {isWorkerOnline && (
+            <div className="bg-green-50 dark:bg-green-950 border border-green-200 dark:border-green-800 rounded-lg p-3 mb-4">
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 bg-green-500 rounded-full animate-pulse" />
+                <p className="text-sm text-green-800 dark:text-green-200">Worker çevrimiçi</p>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2">
             <div className="flex justify-between text-sm"><span>İşlenen: {session.total_processed} / {session.total_in_queue}</span><span>{progressPercent.toFixed(1)}%</span></div>
             <Progress value={progressPercent} />

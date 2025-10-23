@@ -494,6 +494,36 @@ export type Database = {
         }
         Relationships: []
       }
+      worker_heartbeats: {
+        Row: {
+          created_at: string
+          details: Json | null
+          id: string
+          last_seen: string
+          status: string
+          version: string | null
+          worker_id: string
+        }
+        Insert: {
+          created_at?: string
+          details?: Json | null
+          id?: string
+          last_seen?: string
+          status?: string
+          version?: string | null
+          worker_id: string
+        }
+        Update: {
+          created_at?: string
+          details?: Json | null
+          id?: string
+          last_seen?: string
+          status?: string
+          version?: string | null
+          worker_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
