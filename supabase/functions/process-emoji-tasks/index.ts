@@ -85,6 +85,8 @@ async function ensureGroupMembership(
   }
 }
 
+const BATCH_SIZE = 8; // Process 8 accounts at a time
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -93,28 +95,31 @@ serve(async (req) => {
   try {
     const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-    // Get next queued task
+    // Get next queued OR processing task (to continue batch processing)
     const { data: task } = await supabase
       .from('emoji_tasks')
       .select('*')
-      .eq('status', 'queued')
+      .in('status', ['queued', 'processing'])
       .order('queue_number', { ascending: true })
       .limit(1)
       .single();
 
     if (!task) {
+      console.log('No tasks in queue');
       return new Response(JSON.stringify({ message: 'No tasks in queue' }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
-    console.log('Processing task:', task.id);
+    console.log('Processing task:', task.id, 'Status:', task.status);
 
-    // Update task status to processing
-    await supabase
-      .from('emoji_tasks')
-      .update({ status: 'processing', started_at: new Date().toISOString() })
-      .eq('id', task.id);
+    // Update task status to processing if it's queued
+    if (task.status === 'queued') {
+      await supabase
+        .from('emoji_tasks')
+        .update({ status: 'processing', started_at: new Date().toISOString() })
+        .eq('id', task.id);
+    }
 
     // Parse group and message IDs from links
     const { groupId, messageId } = parseLinks(task.group_link, task.post_link);
@@ -142,17 +147,27 @@ serve(async (req) => {
       .update({ group_id: groupId, message_id: messageId })
       .eq('id', task.id);
 
-    // Get active accounts
-    const { data: accounts } = await supabase
+    // Get already processed account IDs from logs
+    const { data: processedLogs } = await supabase
+      .from('emoji_task_logs')
+      .select('account_id')
+      .eq('task_id', task.id)
+      .in('action_type', ['view_message', 'emoji_reaction'])
+      .eq('status', 'success');
+
+    const processedAccountIds = new Set(processedLogs?.map(log => log.account_id) || []);
+    console.log(`Already processed ${processedAccountIds.size} accounts for this task`);
+
+    // Get active accounts NOT yet processed
+    const { data: allAccounts } = await supabase
       .from('telegram_accounts')
       .select(`
         *,
         telegram_api_credentials (api_id, api_hash)
       `)
-      .eq('is_active', true)
-      .limit(task.requested_count);
+      .eq('is_active', true);
 
-    if (!accounts || accounts.length === 0) {
+    if (!allAccounts || allAccounts.length === 0) {
       await supabase
         .from('emoji_tasks')
         .update({
@@ -169,15 +184,60 @@ serve(async (req) => {
       });
     }
 
+    // Filter out already processed accounts and take batch
+    const remainingAccounts = allAccounts.filter(acc => !processedAccountIds.has(acc.id));
+    const accountsToProcess = remainingAccounts.slice(0, BATCH_SIZE);
+
+    console.log(`Processing batch of ${accountsToProcess.length} accounts (${remainingAccounts.length} remaining)`);
+
+    if (accountsToProcess.length === 0) {
+      // All accounts processed, mark as completed
+      const { data: finalLogs } = await supabase
+        .from('emoji_task_logs')
+        .select('status')
+        .eq('task_id', task.id)
+        .in('action_type', ['view_message', 'emoji_reaction']);
+
+      const successCount = finalLogs?.filter(log => log.status === 'success').length || 0;
+      const failedCount = finalLogs?.filter(log => log.status === 'failed').length || 0;
+
+      await supabase
+        .from('emoji_tasks')
+        .update({
+          status: 'completed',
+          total_success: successCount,
+          total_failed: failedCount,
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', task.id);
+
+      await notifyUser(task.chat_id, `✅ Görev #${task.queue_number} tamamlandı!\n📊 Başarılı: ${successCount}\n❌ Başarısız: ${failedCount}`);
+      
+      return new Response(JSON.stringify({ message: 'Task completed', successCount, failedCount }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    // Log batch start
+    await supabase
+      .from('emoji_task_logs')
+      .insert({
+        task_id: task.id,
+        account_id: accountsToProcess[0].id,
+        action_type: 'batch_start',
+        status: 'success',
+        error_message: `Processing batch of ${accountsToProcess.length} accounts`,
+      });
+
     // Get emojis based on task type
     const emojis = getEmojis(task.task_type, task.custom_emojis);
 
-    let successCount = 0;
-    let failedCount = 0;
+    let batchSuccessCount = 0;
+    let batchFailedCount = 0;
     let joinedCount = 0;
 
-    // Process each account
-    for (const account of accounts) {
+    // Process each account in this batch
+    for (const account of accountsToProcess) {
       try {
         console.log(`Processing account: ${account.phone_number}`);
         
@@ -253,7 +313,7 @@ serve(async (req) => {
         }
 
         await client.disconnect();
-        successCount++;
+        batchSuccessCount++;
 
         // Rate limiting: 2-3 seconds between accounts
         await new Promise(resolve => setTimeout(resolve, 2500));
@@ -272,42 +332,97 @@ serve(async (req) => {
             error_message: error instanceof Error ? error.message : String(error),
           });
 
-        failedCount++;
+        batchFailedCount++;
       }
     }
 
-    // Update task as completed
+    // Log batch end
+    await supabase
+      .from('emoji_task_logs')
+      .insert({
+        task_id: task.id,
+        account_id: accountsToProcess[0].id,
+        action_type: 'batch_end',
+        status: 'success',
+        error_message: `Batch complete: ${batchSuccessCount} success, ${batchFailedCount} failed`,
+      });
+
+    // Get total counts from logs
+    const { data: allLogs } = await supabase
+      .from('emoji_task_logs')
+      .select('status')
+      .eq('task_id', task.id)
+      .in('action_type', ['view_message', 'emoji_reaction']);
+
+    const totalSuccess = allLogs?.filter(log => log.status === 'success').length || 0;
+    const totalFailed = allLogs?.filter(log => log.status === 'failed').length || 0;
+
+    // Update current counts
     await supabase
       .from('emoji_tasks')
       .update({
-        status: 'completed',
-        total_success: successCount,
-        total_failed: failedCount,
-        completed_at: new Date().toISOString(),
+        total_success: totalSuccess,
+        total_failed: totalFailed,
       })
       .eq('id', task.id);
 
-    // Notify user
-    let message = `✅ Görev #${task.queue_number} tamamlandı!\n\n`;
-    
-    if (joinedCount > 0) {
-      message += `👥 Gruba katılan: ${joinedCount}\n`;
-    }
-    
-    message += `📊 Başarılı: ${successCount}\n` +
-      `❌ Başarısız: ${failedCount}\n` +
-      `📝 Toplam: ${successCount + failedCount}`;
-    
-    await notifyUser(task.chat_id, message);
+    // Check if we need to continue processing
+    const totalProcessed = totalSuccess + totalFailed;
+    const needMoreProcessing = totalProcessed < task.requested_count && remainingAccounts.length > accountsToProcess.length;
 
-    return new Response(JSON.stringify({
-      success: true,
-      task_id: task.id,
-      total_success: successCount,
-      total_failed: failedCount,
-    }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    if (needMoreProcessing) {
+      console.log(`Task needs more processing: ${totalProcessed}/${task.requested_count} complete`);
+      
+      // Self-invoke for next batch
+      try {
+        await supabase.functions.invoke('process-emoji-tasks');
+      } catch (error) {
+        console.error('Failed to trigger next batch:', error);
+      }
+
+      return new Response(JSON.stringify({
+        success: true,
+        task_id: task.id,
+        batch_success: batchSuccessCount,
+        batch_failed: batchFailedCount,
+        total_success: totalSuccess,
+        total_failed: totalFailed,
+        more_processing_needed: true,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    } else {
+      // Task complete
+      await supabase
+        .from('emoji_tasks')
+        .update({
+          status: 'completed',
+          completed_at: new Date().toISOString(),
+        })
+        .eq('id', task.id);
+
+      let message = `✅ Görev #${task.queue_number} tamamlandı!\n\n`;
+      
+      if (joinedCount > 0) {
+        message += `👥 Gruba katılan: ${joinedCount}\n`;
+      }
+      
+      message += `📊 Başarılı: ${totalSuccess}\n` +
+        `❌ Başarısız: ${totalFailed}\n` +
+        `📝 Toplam: ${totalSuccess + totalFailed}`;
+      
+      await notifyUser(task.chat_id, message);
+
+      return new Response(JSON.stringify({
+        success: true,
+        task_id: task.id,
+        total_success: totalSuccess,
+        total_failed: totalFailed,
+        completed: true,
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
 
   } catch (error) {
     console.error('Error processing task:', error);

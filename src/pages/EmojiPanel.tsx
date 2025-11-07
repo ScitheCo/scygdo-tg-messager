@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Header } from "@/components/Header";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -8,7 +8,8 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { Trash2, Plus } from "lucide-react";
+import { Trash2, Plus, Play, AlertCircle } from "lucide-react";
+import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface AuthorizedUser {
   id: string;
@@ -51,6 +52,7 @@ export default function EmojiPanel() {
   const [tasks, setTasks] = useState<EmojiTask[]>([]);
   const [logs, setLogs] = useState<TaskLog[]>([]);
   const [newUsername, setNewUsername] = useState("");
+  const [isStartingWorker, setIsStartingWorker] = useState(false);
   const [stats, setStats] = useState({
     total: 0,
     queued: 0,
@@ -58,6 +60,7 @@ export default function EmojiPanel() {
     failed: 0,
   });
   const { toast } = useToast();
+  const autoTriggerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     fetchAuthorizedUsers();
@@ -72,8 +75,33 @@ export default function EmojiPanel() {
     const queued = tasks.filter(t => t.status === 'queued').length;
     const completed = tasks.filter(t => t.status === 'completed').length;
     const failed = tasks.filter(t => t.status === 'failed').length;
+    const processing = tasks.filter(t => t.status === 'processing').length;
     setStats({ total, queued, completed, failed });
+
+    // Auto-trigger worker if there are queued or processing tasks
+    if (queued > 0 || processing > 0) {
+      if (!autoTriggerRef.current) {
+        autoTriggerRef.current = setInterval(() => {
+          console.log('Auto-triggering worker...');
+          triggerWorker(true);
+        }, 10000); // Every 10 seconds
+      }
+    } else {
+      if (autoTriggerRef.current) {
+        clearInterval(autoTriggerRef.current);
+        autoTriggerRef.current = null;
+      }
+    }
   }, [tasks]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (autoTriggerRef.current) {
+        clearInterval(autoTriggerRef.current);
+      }
+    };
+  }, []);
 
   const subscribeToChanges = () => {
     const tasksChannel = supabase
@@ -177,6 +205,43 @@ export default function EmojiPanel() {
     fetchAuthorizedUsers();
   };
 
+  const triggerWorker = async (isAuto = false) => {
+    if (!isAuto) setIsStartingWorker(true);
+    
+    try {
+      const { error } = await supabase.functions.invoke('process-emoji-tasks');
+      
+      if (error) {
+        console.error('Worker trigger error:', error);
+        if (!isAuto) {
+          toast({ 
+            title: "Hata", 
+            description: "İşçi başlatılamadı: " + error.message, 
+            variant: "destructive" 
+          });
+        }
+      } else {
+        if (!isAuto) {
+          toast({ 
+            title: "Başarılı", 
+            description: "Görev işçisi başlatıldı" 
+          });
+        }
+      }
+    } catch (error) {
+      console.error('Worker trigger error:', error);
+      if (!isAuto) {
+        toast({ 
+          title: "Hata", 
+          description: "İşçi başlatılamadı", 
+          variant: "destructive" 
+        });
+      }
+    } finally {
+      if (!isAuto) setIsStartingWorker(false);
+    }
+  };
+
   const getTaskTypeBadge = (type: string) => {
     const types: Record<string, string> = {
       positive_emoji: '📈 Pozitif',
@@ -212,6 +277,24 @@ export default function EmojiPanel() {
     <div className="min-h-screen bg-background">
       <Header />
       <main className="container mx-auto px-4 py-8 space-y-6">
+        {/* Worker Control */}
+        {stats.queued > 0 && (
+          <Alert>
+            <AlertCircle className="h-4 w-4" />
+            <AlertDescription className="flex items-center justify-between">
+              <span>Sırada {stats.queued} görev var</span>
+              <Button 
+                size="sm" 
+                onClick={() => triggerWorker()}
+                disabled={isStartingWorker}
+              >
+                <Play className="mr-2 h-4 w-4" />
+                {isStartingWorker ? 'Başlatılıyor...' : 'İşçiyi Başlat'}
+              </Button>
+            </AlertDescription>
+          </Alert>
+        )}
+
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
           <Card>
