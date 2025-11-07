@@ -238,21 +238,26 @@ serve(async (req) => {
 
     // Process each account in this batch
     for (const account of accountsToProcess) {
+      let client: TelegramClient | null = null;
+      
       try {
         console.log(`Processing account: ${account.phone_number}`);
         
-        const client = new TelegramClient(
+        client = new TelegramClient(
           new StringSession(account.session_string),
           parseInt(account.telegram_api_credentials.api_id),
           account.telegram_api_credentials.api_hash,
           {
-            connectionRetries: 5,
-            useWSS: true,
-            timeout: 30000,
+            connectionRetries: 3,
+            useWSS: false, // Use TCP instead of WebSocket in edge functions
+            timeout: 20000,
+            floodSleepThreshold: 60,
           }
         );
 
+        console.log(`Connecting account: ${account.phone_number}...`);
         await client.connect();
+        console.log(`Connected: ${account.phone_number}`);
 
         // Get group entity
         const groupEntity = await client.getEntity(groupId);
@@ -312,11 +317,7 @@ serve(async (req) => {
             });
         }
 
-        await client.disconnect();
         batchSuccessCount++;
-
-        // Rate limiting: 2-3 seconds between accounts
-        await new Promise(resolve => setTimeout(resolve, 2500));
 
       } catch (error) {
         console.error(`Error processing account ${account.phone_number}:`, error);
@@ -333,6 +334,19 @@ serve(async (req) => {
           });
 
         batchFailedCount++;
+      } finally {
+        // Always disconnect client
+        if (client) {
+          try {
+            await client.disconnect();
+            console.log(`Disconnected: ${account.phone_number}`);
+          } catch (e) {
+            console.error(`Error disconnecting ${account.phone_number}:`, e);
+          }
+        }
+        
+        // Rate limiting: 2-3 seconds between accounts
+        await new Promise(resolve => setTimeout(resolve, 2500));
       }
     }
 
