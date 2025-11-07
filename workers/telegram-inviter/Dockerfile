@@ -6,9 +6,8 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install dependencies with fallback registry
-RUN npm i -g npm@11 \
-  && npm config set registry https://registry.npmjs.org/ \
+# Install dependencies with resilient settings + mirror fallback
+RUN npm config set registry https://registry.npmjs.org/ \
   && npm config set prefer-online true \
   && npm config set fetch-retries 6 \
   && npm config set fetch-retry-mintimeout 30000 \

@@ -1,7 +1,7 @@
 steps:
-  # Build the container image
+  # Build the container image (no cache)
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['build', '-t', 'gcr.io/$PROJECT_ID/telegram-inviter-worker', '.']
+    args: ['build', '--no-cache', '-t', 'gcr.io/$PROJECT_ID/telegram-inviter-worker', '.']
   
   # Push the container image to Container Registry
   - name: 'gcr.io/cloud-builders/docker'
