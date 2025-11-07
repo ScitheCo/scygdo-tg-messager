@@ -7,7 +7,13 @@ COPY package*.json ./
 COPY tsconfig.json ./
 
 # Install dependencies (production only for smaller image)
-RUN npm install --production
+RUN npm config set registry https://registry.npmjs.org/ \
+  && npm config set prefer-online true \
+  && npm config set fetch-retries 5 \
+  && npm config set fetch-retry-mintimeout 20000 \
+  && npm config set fetch-retry-maxtimeout 120000 \
+  && npm cache clean --force \
+  && npm install --production --no-audit --no-fund
 
 # Copy source
 COPY src ./src
