@@ -5,7 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
-import MemberScraping from "./pages/MemberScraping";
+import EmojiPanel from "./pages/EmojiPanel";
 import NotFound from "./pages/NotFound";
 import { useAuth } from "./hooks/useAuth";
 
@@ -50,10 +50,10 @@ const App = () => (
             }
           />
           <Route
-            path="/member-scraping"
+            path="/emoji-panel"
             element={
               <ProtectedRoute requireSuperAdmin={true}>
-                <MemberScraping />
+                <EmojiPanel />
               </ProtectedRoute>
             }
           />

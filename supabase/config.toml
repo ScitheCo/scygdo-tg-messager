@@ -1,1 +1,19 @@
 project_id = "hmjmlqmwfarqlrhrkyla"
+
+[functions.telegram-bot-webhook]
+verify_jwt = false
+
+[functions.process-emoji-tasks]
+verify_jwt = false
+
+[functions.scrape-source-members]
+verify_jwt = false
+
+[functions.telegram-sync-groups]
+verify_jwt = false
+
+[functions.validate-telegram-group]
+verify_jwt = false
+
+[functions.process-member-invites]
+verify_jwt = false

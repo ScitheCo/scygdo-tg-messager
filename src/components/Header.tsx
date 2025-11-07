@@ -1,4 +1,4 @@
-import { Zap, LogOut, Plus, Users, Send } from "lucide-react";
+import { Zap, LogOut, Plus, Send } from "lucide-react";
 import { Button } from "./ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
@@ -18,7 +18,7 @@ export const Header = () => {
   const [apiHash, setApiHash] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const isOnMemberScrapingPage = location.pathname === '/member-scraping';
+  const isOnEmojiPanel = location.pathname === '/emoji-panel';
 
   const handleLogout = async () => {
     try {
@@ -73,10 +73,10 @@ export const Header = () => {
             <Button 
               variant="outline" 
               size="sm" 
-              onClick={() => navigate(isOnMemberScrapingPage ? '/' : '/member-scraping')} 
+              onClick={() => navigate(isOnEmojiPanel ? '/' : '/emoji-panel')} 
               className="gap-1 md:gap-2 text-xs md:text-sm"
             >
-              {isOnMemberScrapingPage ? (
+              {isOnEmojiPanel ? (
                 <>
                   <Send className="h-3 w-3 md:h-4 md:w-4" />
                   <span className="hidden sm:inline">Mesaj Gönder</span>
@@ -84,9 +84,9 @@ export const Header = () => {
                 </>
               ) : (
                 <>
-                  <Users className="h-3 w-3 md:h-4 md:w-4" />
-                  <span className="hidden sm:inline">Üye Çekimi</span>
-                  <span className="sm:hidden">Üye</span>
+                  <Zap className="h-3 w-3 md:h-4 md:w-4" />
+                  <span className="hidden sm:inline">Emoji Panel</span>
+                  <span className="sm:hidden">Emoji</span>
                 </>
               )}
             </Button>
