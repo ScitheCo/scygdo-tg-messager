@@ -6,14 +6,21 @@ WORKDIR /app
 COPY package*.json ./
 COPY tsconfig.json ./
 
-# Install dependencies (production only for smaller image)
-RUN npm config set registry https://registry.npmjs.org/ \
+# Install dependencies with fallback registry
+RUN npm i -g npm@11 \
+  && npm config set registry https://registry.npmjs.org/ \
   && npm config set prefer-online true \
-  && npm config set fetch-retries 5 \
-  && npm config set fetch-retry-mintimeout 20000 \
-  && npm config set fetch-retry-maxtimeout 120000 \
+  && npm config set fetch-retries 6 \
+  && npm config set fetch-retry-mintimeout 30000 \
+  && npm config set fetch-retry-maxtimeout 180000 \
+  && npm config set fetch-timeout 600000 \
+  && npm config set cache /tmp/npm-cache \
   && npm cache clean --force \
-  && npm install --production --no-audit --no-fund
+  && (npm install --production --no-audit --no-fund || \
+      (echo "Primary registry failed, switching to mirror" && \
+       npm config set registry https://registry.npmmirror.com/ && \
+       npm cache clean --force && \
+       npm install --production --no-audit --no-fund))
 
 # Copy source
 COPY src ./src
