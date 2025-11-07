@@ -7,7 +7,7 @@ COPY package*.json ./
 COPY tsconfig.json ./
 
 # Install dependencies (production only for smaller image)
-RUN npm ci --only=production
+RUN npm install --production
 
 # Copy source
 COPY src ./src
