@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { Trash2, Plus, Play, AlertCircle } from "lucide-react";
+import { Trash2, Plus, Play, AlertCircle, RotateCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface AuthorizedUser {
@@ -242,6 +242,41 @@ export default function EmojiPanel() {
     }
   };
 
+  const handleRetryTask = async (taskId: string) => {
+    try {
+      const { error } = await supabase
+        .from('emoji_tasks')
+        .update({ 
+          status: 'queued',
+          started_at: null
+        })
+        .eq('id', taskId);
+
+      if (error) {
+        toast({ 
+          title: "Hata", 
+          description: "Görev sıfırlanamadı: " + error.message, 
+          variant: "destructive" 
+        });
+        return;
+      }
+
+      toast({ 
+        title: "Başarılı", 
+        description: "Görev tekrar sıraya alındı" 
+      });
+
+      // Trigger worker after resetting
+      triggerWorker();
+    } catch (error) {
+      toast({ 
+        title: "Hata", 
+        description: "Görev sıfırlanamadı", 
+        variant: "destructive" 
+      });
+    }
+  };
+
   const getTaskTypeBadge = (type: string) => {
     const types: Record<string, string> = {
       positive_emoji: '📈 Pozitif',
@@ -405,6 +440,7 @@ export default function EmojiPanel() {
                     <TableHead>Durum</TableHead>
                     <TableHead>Başarı/Hata</TableHead>
                     <TableHead>Tarih</TableHead>
+                    <TableHead className="text-right">İşlemler</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -428,11 +464,23 @@ export default function EmojiPanel() {
                         <span className="text-red-500 ml-1">{task.total_failed}</span>
                       </TableCell>
                       <TableCell className="text-xs">{formatDate(task.created_at)}</TableCell>
+                      <TableCell className="text-right">
+                        {task.status === 'processing' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleRetryTask(task.id)}
+                          >
+                            <RotateCw className="h-4 w-4 mr-2" />
+                            Tekrar Dene
+                          </Button>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                   {tasks.length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={9} className="text-center text-muted-foreground">
+                      <TableCell colSpan={10} className="text-center text-muted-foreground">
                         Henüz görev bulunmuyor
                       </TableCell>
                     </TableRow>
