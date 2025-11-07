@@ -46,6 +46,186 @@ export type Database = {
           },
         ]
       }
+      authorized_bot_users: {
+        Row: {
+          added_by: string | null
+          created_at: string
+          id: string
+          is_active: boolean
+          telegram_username: string
+        }
+        Insert: {
+          added_by?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          telegram_username: string
+        }
+        Update: {
+          added_by?: string | null
+          created_at?: string
+          id?: string
+          is_active?: boolean
+          telegram_username?: string
+        }
+        Relationships: []
+      }
+      bot_conversation_states: {
+        Row: {
+          chat_id: number
+          created_at: string
+          current_step: string
+          custom_emojis: string[] | null
+          group_link: string | null
+          id: string
+          post_link: string | null
+          task_type: string | null
+          telegram_user_id: number
+          updated_at: string
+        }
+        Insert: {
+          chat_id: number
+          created_at?: string
+          current_step: string
+          custom_emojis?: string[] | null
+          group_link?: string | null
+          id?: string
+          post_link?: string | null
+          task_type?: string | null
+          telegram_user_id: number
+          updated_at?: string
+        }
+        Update: {
+          chat_id?: number
+          created_at?: string
+          current_step?: string
+          custom_emojis?: string[] | null
+          group_link?: string | null
+          id?: string
+          post_link?: string | null
+          task_type?: string | null
+          telegram_user_id?: number
+          updated_at?: string
+        }
+        Relationships: []
+      }
+      emoji_task_logs: {
+        Row: {
+          account_id: string
+          action_type: string
+          created_at: string
+          emoji_used: string | null
+          error_message: string | null
+          id: string
+          status: string
+          task_id: string
+        }
+        Insert: {
+          account_id: string
+          action_type: string
+          created_at?: string
+          emoji_used?: string | null
+          error_message?: string | null
+          id?: string
+          status: string
+          task_id: string
+        }
+        Update: {
+          account_id?: string
+          action_type?: string
+          created_at?: string
+          emoji_used?: string | null
+          error_message?: string | null
+          id?: string
+          status?: string
+          task_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "emoji_task_logs_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: false
+            referencedRelation: "telegram_accounts"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "emoji_task_logs_task_id_fkey"
+            columns: ["task_id"]
+            isOneToOne: false
+            referencedRelation: "emoji_tasks"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      emoji_tasks: {
+        Row: {
+          available_count: number
+          chat_id: number
+          completed_at: string | null
+          created_at: string
+          custom_emojis: string[] | null
+          error_message: string | null
+          group_id: number | null
+          group_link: string
+          id: string
+          message_id: number | null
+          post_link: string
+          queue_number: number
+          requested_count: number
+          started_at: string | null
+          status: string
+          task_type: string
+          telegram_user_id: number
+          telegram_username: string
+          total_failed: number
+          total_success: number
+        }
+        Insert: {
+          available_count: number
+          chat_id: number
+          completed_at?: string | null
+          created_at?: string
+          custom_emojis?: string[] | null
+          error_message?: string | null
+          group_id?: number | null
+          group_link: string
+          id?: string
+          message_id?: number | null
+          post_link: string
+          queue_number: number
+          requested_count: number
+          started_at?: string | null
+          status?: string
+          task_type: string
+          telegram_user_id: number
+          telegram_username: string
+          total_failed?: number
+          total_success?: number
+        }
+        Update: {
+          available_count?: number
+          chat_id?: number
+          completed_at?: string | null
+          created_at?: string
+          custom_emojis?: string[] | null
+          error_message?: string | null
+          group_id?: number | null
+          group_link?: string
+          id?: string
+          message_id?: number | null
+          post_link?: string
+          queue_number?: number
+          requested_count?: number
+          started_at?: string | null
+          status?: string
+          task_type?: string
+          telegram_user_id?: number
+          telegram_username?: string
+          total_failed?: number
+          total_success?: number
+        }
+        Relationships: []
+      }
       member_scraping_logs: {
         Row: {
           account_id: string | null
