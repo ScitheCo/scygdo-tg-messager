@@ -16,6 +16,76 @@ const corsHeaders = {
 const POSITIVE_EMOJIS = ['👍', '❤️', '🔥', '👏', '🎉', '💯'];
 const NEGATIVE_EMOJIS = ['👎', '💔', '😢', '😡', '🤮'];
 
+async function ensureGroupMembership(
+  client: TelegramClient, 
+  groupEntity: any, 
+  accountPhone: string,
+  supabase: any,
+  taskId: string,
+  accountId: string
+): Promise<{ joined: boolean; alreadyMember: boolean }> {
+  try {
+    // Check if account is already a member
+    await client.invoke(new Api.channels.GetParticipant({
+      channel: groupEntity,
+      participant: 'me',
+    }));
+    
+    console.log(`Account ${accountPhone}: Already a member`);
+    return { joined: false, alreadyMember: true };
+    
+  } catch (error: any) {
+    // USER_NOT_PARTICIPANT error = not a member, try to join
+    if (error.message?.includes('USER_NOT_PARTICIPANT')) {
+      try {
+        console.log(`Account ${accountPhone}: Not a member, attempting to join...`);
+        
+        // Try to join the group/channel
+        await client.invoke(new Api.channels.JoinChannel({
+          channel: groupEntity,
+        }));
+        
+        console.log(`Account ${accountPhone}: Successfully joined the group`);
+        
+        // Log the join action
+        await supabase
+          .from('emoji_task_logs')
+          .insert({
+            task_id: taskId,
+            account_id: accountId,
+            action_type: 'group_join',
+            status: 'success',
+          });
+        
+        // Wait 2 seconds after joining (Telegram rate limit)
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        return { joined: true, alreadyMember: false };
+        
+      } catch (joinError: any) {
+        const errorMsg = joinError.message || String(joinError);
+        console.error(`Account ${accountPhone}: Failed to join group:`, errorMsg);
+        
+        // Log the failed join attempt
+        await supabase
+          .from('emoji_task_logs')
+          .insert({
+            task_id: taskId,
+            account_id: accountId,
+            action_type: 'group_join',
+            status: 'failed',
+            error_message: errorMsg,
+          });
+        
+        throw new Error(`Gruba katılamadı: ${errorMsg}`);
+      }
+    }
+    
+    // Other errors
+    throw error;
+  }
+}
+
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
@@ -105,6 +175,7 @@ serve(async (req) => {
 
     let successCount = 0;
     let failedCount = 0;
+    let joinedCount = 0;
 
     // Process each account
     for (const account of accounts) {
@@ -126,6 +197,20 @@ serve(async (req) => {
 
         // Get group entity
         const groupEntity = await client.getEntity(groupId);
+
+        // Ensure account is a member of the group, join if not
+        const membershipStatus = await ensureGroupMembership(
+          client,
+          groupEntity,
+          account.phone_number,
+          supabase,
+          task.id,
+          account.id
+        );
+
+        if (membershipStatus.joined) {
+          joinedCount++;
+        }
 
         // View message (increases view count)
         await client.invoke(new Api.messages.GetMessages({
@@ -204,8 +289,13 @@ serve(async (req) => {
       .eq('id', task.id);
 
     // Notify user
-    const message = `✅ Görev #${task.queue_number} tamamlandı!\n\n` +
-      `📊 Başarılı: ${successCount}\n` +
+    let message = `✅ Görev #${task.queue_number} tamamlandı!\n\n`;
+    
+    if (joinedCount > 0) {
+      message += `👥 Gruba katılan: ${joinedCount}\n`;
+    }
+    
+    message += `📊 Başarılı: ${successCount}\n` +
       `❌ Başarısız: ${failedCount}\n` +
       `📝 Toplam: ${successCount + failedCount}`;
     
