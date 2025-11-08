@@ -22,7 +22,7 @@ const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const clientCache = new Map<string, TelegramClient>();
 const entityCache = new Map<string, any>();
 
-let supabase: SupabaseClient | null = null;
+let supabase: SupabaseClient = null as any;
 let server: http.Server | null = null;
 let isShuttingDown = false;
 
