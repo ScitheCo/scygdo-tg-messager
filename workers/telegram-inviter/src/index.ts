@@ -62,7 +62,7 @@ function initSupabase() {
     log('info', '✅ Supabase client initialized');
   } catch (error) {
     log('error', '❌ Failed to initialize Supabase', error);
-    supabase = null;
+    supabase = null as any;
   }
 }
 
