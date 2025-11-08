@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import * as http from 'http';
 import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
@@ -22,6 +23,7 @@ const clientCache = new Map<string, TelegramClient>();
 const entityCache = new Map<string, any>();
 
 let supabase: SupabaseClient;
+let server: http.Server | null = null;
 let isShuttingDown = false;
 
 // Logging
@@ -30,6 +32,22 @@ function log(level: string, message: string, data?: any) {
     const timestamp = new Date().toISOString();
     console.log(`[${timestamp}] [${level.toUpperCase()}] ${message}`, data || '');
   }
+}
+
+// Start HTTP server for Cloud Run health checks
+function startHttpServer() {
+  const port = Number(process.env.PORT || '8080');
+  server = http.createServer((req, res) => {
+    const path = req.url || '/';
+    if (path === '/health' || path === '/_ah/health' || path === '/ready') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('ok');
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/plain' });
+    res.end('telegram-inviter-worker');
+  });
+  server.listen(port, () => log('info', `HTTP server listening on port ${port}`));
 }
 
 // Initialize Supabase
@@ -623,6 +641,15 @@ async function cleanup() {
   log('info', '🛑 Shutting down worker...');
   isShuttingDown = true;
 
+  // Close HTTP server
+  if (server) {
+    await new Promise<void>((resolve) => server!.close(() => {
+      log('info', 'HTTP server closed');
+      resolve();
+    }));
+    server = null;
+  }
+
   // Disconnect all clients
   for (const [accountId, client] of clientCache.entries()) {
     try {
@@ -654,6 +681,7 @@ async function start() {
   log('info', `Batch Size: ${BATCH_SIZE}`);
   log('info', `Poll Interval: ${POLL_INTERVAL}ms`);
 
+  startHttpServer();
   initSupabase();
   await sendHeartbeat();
 
