@@ -3,7 +3,7 @@ FROM node:18-alpine
 WORKDIR /app
 
 # Copy package files
-COPY package*.json ./
+COPY package.json ./
 COPY tsconfig.json ./
 
 # Install dependencies with resilient settings + mirror fallback
@@ -15,11 +15,11 @@ RUN npm config set registry https://registry.npmjs.org/ \
   && npm config set fetch-timeout 600000 \
   && npm config set cache /tmp/npm-cache \
   && npm cache clean --force \
-  && (npm install --production --no-audit --no-fund || \
+  && (npm install --omit=dev --no-audit --no-fund || \
       (echo "Primary registry failed, switching to mirror" && \
        npm config set registry https://registry.npmmirror.com/ && \
        npm cache clean --force && \
-       npm install --production --no-audit --no-fund))
+       npm install --omit=dev --no-audit --no-fund))
 
 # Copy source
 COPY src ./src
