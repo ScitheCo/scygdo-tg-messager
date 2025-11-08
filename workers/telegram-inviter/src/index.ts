@@ -22,7 +22,7 @@ const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
 const clientCache = new Map<string, TelegramClient>();
 const entityCache = new Map<string, any>();
 
-let supabase: SupabaseClient;
+let supabase: SupabaseClient | null = null;
 let server: http.Server | null = null;
 let isShuttingDown = false;
 
@@ -39,6 +39,7 @@ function startHttpServer() {
   const port = Number(process.env.PORT || '8080');
   server = http.createServer((req, res) => {
     const path = req.url || '/';
+    log('debug', `HTTP ${req.method} ${path}`);
     if (path === '/health' || path === '/_ah/health' || path === '/ready') {
       res.writeHead(200, { 'Content-Type': 'text/plain' });
       res.end('ok');
@@ -47,17 +48,30 @@ function startHttpServer() {
     res.writeHead(200, { 'Content-Type': 'text/plain' });
     res.end('telegram-inviter-worker');
   });
-  server.listen(port, () => log('info', `HTTP server listening on port ${port}`));
+  server.listen(port, '0.0.0.0', () => log('info', `HTTP server listening on 0.0.0.0:${port}`));
 }
 
 // Initialize Supabase
 function initSupabase() {
-  supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-  log('info', '✅ Supabase client initialized');
+  try {
+    if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
+      log('error', '❌ Missing SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY');
+      return;
+    }
+    supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
+    log('info', '✅ Supabase client initialized');
+  } catch (error) {
+    log('error', '❌ Failed to initialize Supabase', error);
+    supabase = null;
+  }
 }
 
 // Send heartbeat
 async function sendHeartbeat() {
+  if (!supabase) {
+    log('warn', 'Supabase not initialized, skipping heartbeat');
+    return;
+  }
   try {
     const { error } = await supabase
       .from('worker_heartbeats')
@@ -603,6 +617,13 @@ async function mainLoop() {
 
   while (!isShuttingDown) {
     try {
+      // Guard: Wait if Supabase not ready
+      if (!supabase) {
+        log('warn', 'Supabase not initialized, waiting...');
+        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
+        continue;
+      }
+
       await sendHeartbeat();
 
       // Get running sessions
@@ -661,13 +682,15 @@ async function cleanup() {
   }
 
   // Update heartbeat status
-  try {
-    await supabase
-      .from('worker_heartbeats')
-      .update({ status: 'offline' })
-      .eq('worker_id', WORKER_ID);
-  } catch (error) {
-    log('error', 'Failed to update heartbeat status', error);
+  if (supabase) {
+    try {
+      await supabase
+        .from('worker_heartbeats')
+        .update({ status: 'offline' })
+        .eq('worker_id', WORKER_ID);
+    } catch (error) {
+      log('error', 'Failed to update heartbeat status', error);
+    }
   }
 
   log('info', '✅ Worker shutdown complete');
@@ -696,8 +719,22 @@ async function start() {
   await mainLoop();
 }
 
-// Run
+// Global error handlers
+process.on('unhandledRejection', (reason) => {
+  log('error', '❌ Unhandled rejection', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  log('error', '❌ Uncaught exception', err);
+});
+
+// Run with retry on fatal error
 start().catch(error => {
-  log('error', 'Fatal error', error);
-  process.exit(1);
+  log('error', '❌ Fatal error in start()', error);
+  log('info', '🔄 Retrying in 5 seconds...');
+  setTimeout(() => {
+    start().catch(e => {
+      log('error', '❌ Retry failed', e);
+    });
+  }, 5000);
 });
