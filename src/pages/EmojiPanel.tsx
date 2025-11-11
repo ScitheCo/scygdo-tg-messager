@@ -47,12 +47,24 @@ interface TaskLog {
   };
 }
 
+interface WorkerStatus {
+  worker_id: string;
+  last_seen: string;
+  status: string;
+  version: string | null;
+  machine_info: any;
+}
+
 export default function EmojiPanel() {
   const [authorizedUsers, setAuthorizedUsers] = useState<AuthorizedUser[]>([]);
   const [tasks, setTasks] = useState<EmojiTask[]>([]);
   const [logs, setLogs] = useState<TaskLog[]>([]);
   const [newUsername, setNewUsername] = useState("");
   const [isStartingWorker, setIsStartingWorker] = useState(false);
+  const [workerStatus, setWorkerStatus] = useState<{
+    onlineCount: number;
+    workers: WorkerStatus[];
+  }>({ onlineCount: 0, workers: [] });
   const [stats, setStats] = useState({
     total: 0,
     queued: 0,
@@ -66,6 +78,7 @@ export default function EmojiPanel() {
     fetchAuthorizedUsers();
     fetchTasks();
     fetchLogs();
+    fetchWorkerStatus();
     subscribeToChanges();
   }, []);
 
@@ -118,9 +131,21 @@ export default function EmojiPanel() {
       })
       .subscribe();
 
+    const heartbeatChannel = supabase
+      .channel('worker-heartbeat-changes')
+      .on('postgres_changes', { 
+        event: '*', 
+        schema: 'public', 
+        table: 'worker_heartbeats'
+      }, () => {
+        fetchWorkerStatus();
+      })
+      .subscribe();
+
     return () => {
       supabase.removeChannel(tasksChannel);
       supabase.removeChannel(logsChannel);
+      supabase.removeChannel(heartbeatChannel);
     };
   };
 
@@ -167,6 +192,26 @@ export default function EmojiPanel() {
       return;
     }
     setLogs(data || []);
+  };
+
+  const fetchWorkerStatus = async () => {
+    const { data, error } = await supabase
+      .from('worker_heartbeats')
+      .select('*')
+      .eq('worker_type', 'desktop')
+      .gte('last_seen', new Date(Date.now() - 60000).toISOString())
+      .order('last_seen', { ascending: false });
+
+    if (error) {
+      console.error('Worker status fetch error:', error);
+      return;
+    }
+
+    const onlineWorkers = data?.filter(w => w.status === 'online') || [];
+    setWorkerStatus({
+      onlineCount: onlineWorkers.length,
+      workers: data || []
+    });
   };
 
   const handleAddUser = async () => {
@@ -329,6 +374,56 @@ export default function EmojiPanel() {
             </AlertDescription>
           </Alert>
         )}
+
+        {/* Worker Status */}
+        <Card className={workerStatus.onlineCount > 0 ? 'border-green-500' : 'border-destructive'}>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium flex items-center justify-between">
+              <span>🖥️ Desktop Worker Durumu</span>
+              {workerStatus.onlineCount > 0 ? (
+                <Badge variant="default" className="bg-green-500 text-white">
+                  🟢 Online ({workerStatus.onlineCount})
+                </Badge>
+              ) : (
+                <Badge variant="destructive">
+                  🔴 Offline
+                </Badge>
+              )}
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {workerStatus.workers.length > 0 ? (
+              workerStatus.workers.map((worker) => (
+                <div key={worker.worker_id} className="flex items-center justify-between text-sm p-2 rounded bg-muted/50">
+                  <div>
+                    <div className="font-medium">{worker.worker_id}</div>
+                    <div className="text-xs text-muted-foreground">
+                      {worker.machine_info?.os || 'Unknown OS'} | {worker.machine_info?.hostname || 'Unknown Host'}
+                    </div>
+                  </div>
+                  <div className="text-right">
+                    <div className={worker.status === 'online' ? 'text-green-500 font-medium' : 'text-destructive font-medium'}>
+                      {worker.status}
+                    </div>
+                    <div className="text-xs text-muted-foreground">
+                      {formatDate(worker.last_seen)}
+                    </div>
+                  </div>
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-muted-foreground">
+                Henüz hiçbir desktop worker bağlanmadı. Desktop worker uygulamasını başlatın.
+              </p>
+            )}
+            <Alert className="mt-2">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription className="text-xs">
+                💡 Desktop worker çevrimdışıyken görevler oluşturulamaz.
+              </AlertDescription>
+            </Alert>
+          </CardContent>
+        </Card>
 
         {/* Stats */}
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">

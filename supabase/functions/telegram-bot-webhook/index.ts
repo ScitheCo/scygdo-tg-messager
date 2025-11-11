@@ -228,11 +228,31 @@ async function handleConversationStep(supabase: any, state: any, message: any) {
         .eq('status', 'online')
         .gte('last_seen', new Date(Date.now() - 60000).toISOString()); // Last minute
 
-      const processingMode = onlineWorkers && onlineWorkers.length > 0 
-        ? 'desktop_worker' 
-        : 'edge_function';
+      // Block task creation if no workers are online
+      if (!onlineWorkers || onlineWorkers.length === 0) {
+        await sendMessage(
+          chatId, 
+          '❌ Sistem şu anda aktif değil.\n\n' +
+          'Desktop worker çevrimdışı. Lütfen daha sonra tekrar deneyin veya ' +
+          'panel yöneticisine bilgi verin.\n\n' +
+          'Yeni görev oluşturmak için /start komutunu kullanın.'
+        );
+        
+        // Reset state
+        await supabase
+          .from('bot_conversation_states')
+          .update({
+            current_step: 'idle',
+            updated_at: new Date().toISOString(),
+          })
+          .eq('telegram_user_id', userId);
+        
+        console.log('Task creation blocked: No online workers');
+        return;
+      }
 
-      console.log(`Processing mode: ${processingMode} (${onlineWorkers?.length || 0} online workers)`);
+      const processingMode = 'desktop_worker';
+      console.log(`Processing mode: ${processingMode} (${onlineWorkers.length} online workers)`);
 
       // Get next queue number
       const { data: lastTask } = await supabase
