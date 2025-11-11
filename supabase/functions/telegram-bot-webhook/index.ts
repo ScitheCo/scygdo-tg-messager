@@ -135,6 +135,22 @@ async function handleConversationStep(supabase: any, state: any, message: any) {
 
   switch (state.current_step) {
     case 'group_link':
+      // Validate group link format (can be username or link)
+      const groupLinkRegex = /^(https?:\/\/t\.me\/[^\s/]+|@[^\s]+)$/;
+      
+      if (!groupLinkRegex.test(text)) {
+        await sendMessage(
+          chatId, 
+          '❌ Geçersiz grup linki!\n\n' +
+          '✅ Doğru format:\n' +
+          '• https://t.me/grup_adi\n' +
+          '• https://t.me/+AbCdEfGhIj\n' +
+          '• @grup_adi\n\n' +
+          '📌 Grup linkini veya kullanıcı adını gönderin.'
+        );
+        return;
+      }
+      
       // Save group link and ask for post link
       await supabase
         .from('bot_conversation_states')
@@ -149,6 +165,25 @@ async function handleConversationStep(supabase: any, state: any, message: any) {
       break;
 
     case 'post_link':
+      // Validate post link format
+      const postLinkRegex = /^https?:\/\/t\.me\/[^\s/]+\/\d+$/;
+      
+      if (!postLinkRegex.test(text)) {
+        await sendMessage(
+          chatId, 
+          '❌ Geçersiz gönderi linki!\n\n' +
+          '✅ Doğru format:\n' +
+          '• https://t.me/kanal_adi/12345\n' +
+          '• https://t.me/c/1234567890/12345\n\n' +
+          '📌 Nasıl alınır?\n' +
+          '1. Telegram\'da gönderiye sağ tıklayın\n' +
+          '2. "Copy Message Link" seçeneğini kullanın\n' +
+          '3. Linki buraya yapıştırın\n\n' +
+          '❗ Gönderi metnini değil, linkini gönderin!'
+        );
+        return;
+      }
+      
       // Save post link and show preset options
       await supabase
         .from('bot_conversation_states')
