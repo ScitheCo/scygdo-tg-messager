@@ -322,6 +322,41 @@ export default function EmojiPanel() {
     }
   };
 
+  const handleFailAllPending = async () => {
+    try {
+      const { error } = await supabase
+        .from('emoji_tasks')
+        .update({ 
+          status: 'failed',
+          error_message: 'Yönetici tarafından iptal edildi',
+          completed_at: new Date().toISOString()
+        })
+        .in('status', ['queued', 'processing']);
+
+      if (error) {
+        toast({ 
+          title: "Hata", 
+          description: "Görevler güncellenemedi: " + error.message, 
+          variant: "destructive" 
+        });
+        return;
+      }
+
+      toast({ 
+        title: "Başarılı", 
+        description: "Tüm bekleyen görevler iptal edildi" 
+      });
+
+      fetchTasks();
+    } catch (error) {
+      toast({ 
+        title: "Hata", 
+        description: "Görevler güncellenemedi", 
+        variant: "destructive" 
+      });
+    }
+  };
+
   const getTaskTypeBadge = (type: string) => {
     const types: Record<string, string> = {
       positive_emoji: '📈 Pozitif',
@@ -363,14 +398,24 @@ export default function EmojiPanel() {
             <AlertCircle className="h-4 w-4" />
             <AlertDescription className="flex items-center justify-between">
               <span>Sırada {stats.queued} görev var</span>
-              <Button 
-                size="sm" 
-                onClick={() => triggerWorker()}
-                disabled={isStartingWorker}
-              >
-                <Play className="mr-2 h-4 w-4" />
-                {isStartingWorker ? 'Başlatılıyor...' : 'İşçiyi Başlat'}
-              </Button>
+              <div className="flex gap-2">
+                <Button 
+                  size="sm" 
+                  onClick={() => triggerWorker()}
+                  disabled={isStartingWorker}
+                >
+                  <Play className="mr-2 h-4 w-4" />
+                  {isStartingWorker ? 'Başlatılıyor...' : 'İşçiyi Başlat'}
+                </Button>
+                <Button 
+                  size="sm"
+                  variant="destructive"
+                  onClick={handleFailAllPending}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Bekleyenleri İptal Et
+                </Button>
+              </div>
             </AlertDescription>
           </Alert>
         )}
