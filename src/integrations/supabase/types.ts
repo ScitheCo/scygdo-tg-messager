@@ -109,6 +109,45 @@ export type Database = {
         }
         Relationships: []
       }
+      desktop_worker_configs: {
+        Row: {
+          auto_start: boolean | null
+          batch_size: number | null
+          created_at: string | null
+          id: string
+          is_enabled: boolean | null
+          poll_interval: number | null
+          settings: Json | null
+          updated_at: string | null
+          user_id: string
+          worker_id: string
+        }
+        Insert: {
+          auto_start?: boolean | null
+          batch_size?: number | null
+          created_at?: string | null
+          id?: string
+          is_enabled?: boolean | null
+          poll_interval?: number | null
+          settings?: Json | null
+          updated_at?: string | null
+          user_id: string
+          worker_id: string
+        }
+        Update: {
+          auto_start?: boolean | null
+          batch_size?: number | null
+          created_at?: string | null
+          id?: string
+          is_enabled?: boolean | null
+          poll_interval?: number | null
+          settings?: Json | null
+          updated_at?: string | null
+          user_id?: string
+          worker_id?: string
+        }
+        Relationships: []
+      }
       emoji_task_logs: {
         Row: {
           account_id: string
@@ -119,6 +158,7 @@ export type Database = {
           id: string
           status: string
           task_id: string
+          worker_id: string | null
         }
         Insert: {
           account_id: string
@@ -129,6 +169,7 @@ export type Database = {
           id?: string
           status: string
           task_id: string
+          worker_id?: string | null
         }
         Update: {
           account_id?: string
@@ -139,6 +180,7 @@ export type Database = {
           id?: string
           status?: string
           task_id?: string
+          worker_id?: string | null
         }
         Relationships: [
           {
@@ -159,6 +201,7 @@ export type Database = {
       }
       emoji_tasks: {
         Row: {
+          assigned_worker_id: string | null
           available_count: number
           chat_id: number
           completed_at: string | null
@@ -170,6 +213,7 @@ export type Database = {
           id: string
           message_id: number | null
           post_link: string
+          processing_mode: string | null
           queue_number: number
           requested_count: number
           started_at: string | null
@@ -181,6 +225,7 @@ export type Database = {
           total_success: number
         }
         Insert: {
+          assigned_worker_id?: string | null
           available_count: number
           chat_id: number
           completed_at?: string | null
@@ -192,6 +237,7 @@ export type Database = {
           id?: string
           message_id?: number | null
           post_link: string
+          processing_mode?: string | null
           queue_number: number
           requested_count: number
           started_at?: string | null
@@ -203,6 +249,7 @@ export type Database = {
           total_success?: number
         }
         Update: {
+          assigned_worker_id?: string | null
           available_count?: number
           chat_id?: number
           completed_at?: string | null
@@ -214,6 +261,7 @@ export type Database = {
           id?: string
           message_id?: number | null
           post_link?: string
+          processing_mode?: string | null
           queue_number?: number
           requested_count?: number
           started_at?: string | null
@@ -680,27 +728,33 @@ export type Database = {
           details: Json | null
           id: string
           last_seen: string
+          machine_info: Json | null
           status: string
           version: string | null
           worker_id: string
+          worker_type: string | null
         }
         Insert: {
           created_at?: string
           details?: Json | null
           id?: string
           last_seen?: string
+          machine_info?: Json | null
           status?: string
           version?: string | null
           worker_id: string
+          worker_type?: string | null
         }
         Update: {
           created_at?: string
           details?: Json | null
           id?: string
           last_seen?: string
+          machine_info?: Json | null
           status?: string
           version?: string | null
           worker_id?: string
+          worker_type?: string | null
         }
         Relationships: []
       }

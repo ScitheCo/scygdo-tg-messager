@@ -220,6 +220,20 @@ async function handleConversationStep(supabase: any, state: any, message: any) {
         .eq('telegram_user_id', userId)
         .single();
 
+      // Check if any desktop workers are online
+      const { data: onlineWorkers } = await supabase
+        .from('worker_heartbeats')
+        .select('worker_id')
+        .eq('worker_type', 'desktop')
+        .eq('status', 'online')
+        .gte('last_seen', new Date(Date.now() - 60000).toISOString()); // Last minute
+
+      const processingMode = onlineWorkers && onlineWorkers.length > 0 
+        ? 'desktop_worker' 
+        : 'edge_function';
+
+      console.log(`Processing mode: ${processingMode} (${onlineWorkers?.length || 0} online workers)`);
+
       // Get next queue number
       const { data: lastTask } = await supabase
         .from('emoji_tasks')
@@ -245,6 +259,7 @@ async function handleConversationStep(supabase: any, state: any, message: any) {
           available_count: availableCount,
           queue_number: queueNumber,
           status: 'queued',
+          processing_mode: processingMode,
         });
 
       if (taskError) {

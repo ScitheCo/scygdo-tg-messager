@@ -17,3 +17,6 @@ verify_jwt = false
 
 [functions.process-member-invites]
 verify_jwt = false
+
+[functions.claim-emoji-task]
+verify_jwt = false
