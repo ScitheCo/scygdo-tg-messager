@@ -15,7 +15,7 @@ const Index = () => {
   const { user } = useAuth();
   const navigate = useNavigate();
 
-  const { data: healthSummary } = useQuery({
+  const { data: healthSummary } = useQuery<{ total: number; healthy: number; issues: number }>({
     queryKey: ['health-summary', user?.id],
     queryFn: async () => {
       const { data: accounts } = await supabase
@@ -25,7 +25,7 @@ const Index = () => {
 
       if (!accounts || accounts.length === 0) return { total: 0, healthy: 0, issues: 0 };
 
-      const { data: healthData } = await supabase
+      const { data: healthData } = await (supabase as any)
         .from('account_health_status')
         .select('status')
         .in('account_id', accounts.map(a => a.id));

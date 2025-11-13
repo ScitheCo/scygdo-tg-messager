@@ -93,16 +93,18 @@ Deno.serve(async (req) => {
           new StringSession(account.session_string),
           parseInt(apiCreds.api_id),
           apiCreds.api_hash,
-          { 
-            connectionRetries: 2,
-            timeout: 15000
+          {
+            // Use WebSocket transport in edge environment for stability
+            useWSS: true,
+            connectionRetries: 3,
+            timeout: 30000
           }
         );
 
         // Try to connect with timeout
         const connectPromise = client.connect();
-        const timeoutPromise = new Promise((_, reject) => 
-          setTimeout(() => reject(new Error('Connection timeout')), 20000)
+        const timeoutPromise = new Promise((_, reject) =>
+          setTimeout(() => reject(new Error('Connection timeout')), 35000)
         );
 
         await Promise.race([connectPromise, timeoutPromise]);
