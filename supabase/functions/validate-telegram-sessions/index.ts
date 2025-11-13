@@ -192,6 +192,55 @@ Deno.serve(async (req) => {
       }
     }
 
+    // Use service role client for writing to account_health_status
+    const serviceClient = createClient(
+      Deno.env.get('SUPABASE_URL') ?? '',
+      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
+    );
+
+    // Write health status to database for all tested accounts
+    for (const result of results) {
+      const healthData = {
+        account_id: result.account_id,
+        last_checked: new Date().toISOString(),
+        status: result.status,
+        error_message: result.message,
+        consecutive_failures: result.status === 'ok' ? 0 : undefined,
+        last_success: result.status === 'ok' ? new Date().toISOString() : undefined,
+        updated_at: new Date().toISOString()
+      };
+
+      const { error: upsertError } = await serviceClient
+        .from('account_health_status')
+        .upsert(healthData, { 
+          onConflict: 'account_id',
+          ignoreDuplicates: false 
+        });
+
+      if (upsertError) {
+        console.error(`Failed to upsert health status for ${result.phone_number}:`, upsertError);
+      } else {
+        // If status is not 'ok', increment consecutive_failures
+        if (result.status !== 'ok') {
+          const { data: existing } = await serviceClient
+            .from('account_health_status')
+            .select('consecutive_failures')
+            .eq('account_id', result.account_id)
+            .single();
+
+          if (existing) {
+            await serviceClient
+              .from('account_health_status')
+              .update({ 
+                consecutive_failures: (existing.consecutive_failures || 0) + 1,
+                updated_at: new Date().toISOString()
+              })
+              .eq('account_id', result.account_id);
+          }
+        }
+      }
+    }
+
     // Deactivate invalid sessions if requested
     if (deactivate_invalid && invalidAccountIds.length > 0) {
       console.log(`Deactivating ${invalidAccountIds.length} invalid accounts`);

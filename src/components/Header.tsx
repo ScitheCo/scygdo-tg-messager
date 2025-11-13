@@ -1,4 +1,4 @@
-import { Zap, LogOut, Plus, Send } from "lucide-react";
+import { Zap, LogOut, Plus, Send, Activity } from "lucide-react";
 import { Button } from "./ui/button";
 import { useAuth } from "@/hooks/useAuth";
 import { toast } from "sonner";
@@ -19,6 +19,7 @@ export const Header = () => {
   const [loading, setLoading] = useState(false);
 
   const isOnEmojiPanel = location.pathname === '/emoji-panel';
+  const isOnAccountHealth = location.pathname === '/account-health';
 
   const handleLogout = async () => {
     try {
@@ -69,6 +70,19 @@ export const Header = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          {!isOnAccountHealth && (
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => navigate('/account-health')} 
+              className="gap-1 md:gap-2 text-xs md:text-sm"
+            >
+              <Activity className="h-3 w-3 md:h-4 md:w-4" />
+              <span className="hidden sm:inline">Hesap Sağlığı</span>
+              <span className="sm:hidden">Sağlık</span>
+            </Button>
+          )}
+          
           {isSuperAdmin && (
             <Button 
               variant="outline" 

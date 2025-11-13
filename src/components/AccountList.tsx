@@ -51,6 +51,24 @@ export const AccountList = () => {
     enabled: !!user
   });
 
+  // Fetch account health status
+  const { data: healthStatuses = [] } = useQuery({
+    queryKey: ['account-health', user?.id],
+    queryFn: async () => {
+      const accountIds = accounts.map(a => a.id);
+      if (accountIds.length === 0) return [];
+
+      const { data, error } = await supabase
+        .from('account_health_status')
+        .select('*')
+        .in('account_id', accountIds);
+
+      if (error) throw error;
+      return data || [];
+    },
+    enabled: !!user && accounts.length > 0
+  });
+
   // Fetch daily limits for accounts
   const { data: dailyLimits = [] } = useQuery({
     queryKey: ['account-daily-limits', user?.id],
@@ -76,6 +94,25 @@ export const AccountList = () => {
   const getAccountLimitStatus = (accountId: string) => {
     const limit = dailyLimits.find(l => l.account_id === accountId);
     return limit;
+  };
+
+  // Helper to get account health status
+  const getAccountHealth = (accountId: string) => {
+    return healthStatuses.find(h => h.account_id === accountId);
+  };
+
+  const getHealthBadge = (status: string) => {
+    const variants = {
+      ok: { label: '✓', className: 'bg-green-600 hover:bg-green-600' },
+      invalid_session: { label: '✗', className: 'bg-red-600 hover:bg-red-600' },
+      rate_limited: { label: '⏱', className: 'bg-yellow-600 hover:bg-yellow-600' },
+      connection_timeout: { label: '⏸', className: 'bg-gray-500 hover:bg-gray-500' },
+      dc_migrate_required: { label: '↔', className: 'bg-purple-600 hover:bg-purple-600' },
+      unknown_error: { label: '?', className: 'bg-orange-600 hover:bg-orange-600' }
+    };
+    const config = variants[status as keyof typeof variants];
+    if (!config) return null;
+    return <Badge variant="default" className={`text-xs ${config.className}`}>{config.label}</Badge>;
   };
 
   const activeAccounts = accounts.filter(acc => acc.is_active);
@@ -351,6 +388,13 @@ export const AccountList = () => {
                       <Badge variant="default" className="text-xs bg-success">
                         Aktif
                       </Badge>
+                      {(() => {
+                        const health = getAccountHealth(account.id);
+                        if (health?.status) {
+                          return getHealthBadge(health.status);
+                        }
+                        return null;
+                      })()}
                       {(() => {
                         const limitStatus = getAccountLimitStatus(account.id);
                         if (limitStatus && limitStatus.members_added_today >= 50) {
