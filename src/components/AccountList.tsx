@@ -2,7 +2,7 @@ import { useStore } from '@/store/useStore';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Users, CheckSquare, Square, Trash2, RefreshCw } from 'lucide-react';
+import { Users, CheckSquare, Square, Trash2, RefreshCw, TestTube2, AlertTriangle } from 'lucide-react';
 import { AddAccountDialog } from './AddAccountDialog';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -10,6 +10,17 @@ import { toast } from 'sonner';
 import { TelegramClient } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { useAuth } from '@/hooks/useAuth';
+import { useState } from 'react';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
+
+interface SessionTestResult {
+  account_id: string;
+  phone_number: string;
+  status: 'ok' | 'invalid_session' | 'rate_limited' | 'connection_timeout' | 'dc_migrate_required' | 'unknown_error';
+  message?: string;
+}
 
 export const AccountList = () => {
   const { user } = useAuth();
@@ -20,6 +31,10 @@ export const AccountList = () => {
   } = useStore();
 
   const queryClient = useQueryClient();
+  const [isTestingSession, setIsTestingSession] = useState(false);
+  const [sessionTestResults, setSessionTestResults] = useState<SessionTestResult[]>([]);
+  const [showResultsDialog, setShowResultsDialog] = useState(false);
+  const [showDeactivateDialog, setShowDeactivateDialog] = useState(false);
 
   const { data: accounts = [], refetch } = useQuery({
     queryKey: ['telegram-accounts', user?.id],
@@ -86,6 +101,72 @@ export const AccountList = () => {
     } catch (error: any) {
       toast.error('Hesap silinemedi: ' + error.message);
     }
+  };
+
+  const handleTestSessions = async () => {
+    setIsTestingSession(true);
+    const toastId = toast.loading('Oturumlar test ediliyor...');
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('validate-telegram-sessions', {
+        body: { 
+          account_ids: selectedAccountIds.length > 0 ? selectedAccountIds : undefined,
+          deactivate_invalid: false 
+        }
+      });
+
+      if (error) throw error;
+
+      setSessionTestResults(data.results || []);
+      setShowResultsDialog(true);
+
+      toast.success(`Test tamamlandı: ${data.summary.ok} başarılı, ${data.summary.invalid_session} geçersiz`, {
+        id: toastId
+      });
+    } catch (error: any) {
+      console.error('Session test error:', error);
+      toast.error('Oturum testi başarısız: ' + error.message, { id: toastId });
+    } finally {
+      setIsTestingSession(false);
+    }
+  };
+
+  const handleDeactivateInvalid = async () => {
+    const toastId = toast.loading('Geçersiz oturumlar pasifleştiriliyor...');
+    
+    try {
+      const { data, error } = await supabase.functions.invoke('validate-telegram-sessions', {
+        body: { 
+          account_ids: selectedAccountIds.length > 0 ? selectedAccountIds : undefined,
+          deactivate_invalid: true 
+        }
+      });
+
+      if (error) throw error;
+
+      setSessionTestResults(data.results || []);
+      toast.success(`${data.summary.invalid_session} hesap pasifleştirildi`, { id: toastId });
+      
+      refetch();
+      setShowDeactivateDialog(false);
+    } catch (error: any) {
+      console.error('Deactivate error:', error);
+      toast.error('Pasifleştirme başarısız: ' + error.message, { id: toastId });
+    }
+  };
+
+  const getStatusBadge = (status: SessionTestResult['status']) => {
+    const variants = {
+      ok: { variant: 'default' as const, label: '✓ Geçerli', className: 'bg-green-600' },
+      invalid_session: { variant: 'destructive' as const, label: '✗ Geçersiz', className: 'bg-red-600' },
+      rate_limited: { variant: 'secondary' as const, label: '⏱ Rate Limit', className: 'bg-yellow-600' },
+      connection_timeout: { variant: 'secondary' as const, label: '⏸ Zaman Aşımı', className: 'bg-gray-500' },
+      dc_migrate_required: { variant: 'secondary' as const, label: '↔ DC Migrasyon', className: 'bg-purple-600' },
+      unknown_error: { variant: 'outline' as const, label: '? Bilinmeyen', className: '' }
+    };
+    
+    const config = variants[status];
+    return <Badge variant={config.variant} className={config.className}>{config.label}</Badge>;
   };
 
   const handleSyncGroups = async (accountId: string) => {
@@ -186,41 +267,52 @@ export const AccountList = () => {
   };
 
   return (
-    <div className="bg-card rounded-xl p-4 md:p-4 border border-border">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
-        <div className="flex items-center gap-2">
-          <Users className="w-5 h-5 text-primary" />
-          <h2 className="text-base md:text-lg font-semibold text-foreground">Hesaplar</h2>
-          {selectedAccountIds.length > 0 && (
-            <Badge variant="secondary" className="bg-primary/20 text-primary text-xs">
-              {selectedAccountIds.length} seçili
-            </Badge>
-          )}
-        </div>
-        <div className="flex gap-2">
-          <AddAccountDialog onAccountAdded={() => refetch()} />
-          {activeAccounts.length > 0 && (
+    <>
+      <div className="bg-card rounded-xl p-4 md:p-4 border border-border">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+          <div className="flex items-center gap-2">
+            <Users className="w-5 h-5 text-primary" />
+            <h2 className="text-base md:text-lg font-semibold text-foreground">Hesaplar</h2>
+            {selectedAccountIds.length > 0 && (
+              <Badge variant="secondary" className="bg-primary/20 text-primary text-xs">
+                {selectedAccountIds.length} seçili
+              </Badge>
+            )}
+          </div>
+          <div className="flex gap-2">
             <Button
-              variant="ghost"
+              variant="outline"
               size="sm"
-              onClick={allSelected ? deselectAllAccounts : handleSelectAll}
-              className="h-8 text-xs hover:bg-muted"
+              onClick={handleTestSessions}
+              disabled={isTestingSession || accounts.length === 0}
+              className="h-8 text-xs"
             >
-              {allSelected ? (
-                <>
-                  <Square className="w-3 h-3 mr-1" />
-                  Temizle
-                </>
-              ) : (
-                <>
-                  <CheckSquare className="w-3 h-3 mr-1" />
-                  Tümünü Seç
-                </>
-              )}
+              <TestTube2 className="w-3 h-3 mr-1" />
+              {isTestingSession ? 'Test Ediliyor...' : 'Oturumları Test Et'}
             </Button>
-          )}
+            <AddAccountDialog onAccountAdded={() => refetch()} />
+            {activeAccounts.length > 0 && (
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={allSelected ? deselectAllAccounts : handleSelectAll}
+                className="h-8 text-xs hover:bg-muted"
+              >
+                {allSelected ? (
+                  <>
+                    <Square className="w-3 h-3 mr-1" />
+                    Temizle
+                  </>
+                ) : (
+                  <>
+                    <CheckSquare className="w-3 h-3 mr-1" />
+                    Tümünü Seç
+                  </>
+                )}
+              </Button>
+            )}
+          </div>
         </div>
-      </div>
 
       <div className="space-y-2 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
         {accounts.length === 0 ? (
@@ -304,5 +396,77 @@ export const AccountList = () => {
         )}
       </div>
     </div>
+
+    <Dialog open={showResultsDialog} onOpenChange={setShowResultsDialog}>
+      <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+        <DialogHeader>
+          <DialogTitle>Oturum Test Sonuçları</DialogTitle>
+          <DialogDescription>
+            Telegram hesap oturumlarınızın durumu
+          </DialogDescription>
+        </DialogHeader>
+        
+        <div className="space-y-4">
+          {sessionTestResults.filter(r => r.status === 'invalid_session').length > 0 && (
+            <div className="flex items-start gap-2 p-3 bg-destructive/10 border border-destructive/20 rounded-lg">
+              <AlertTriangle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-sm font-medium text-destructive">
+                  {sessionTestResults.filter(r => r.status === 'invalid_session').length} hesap geçersiz oturum hatası aldı
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  Bu hesapları pasifleştirmek için aşağıdaki butona tıklayabilirsiniz.
+                </p>
+              </div>
+              <Button
+                variant="destructive"
+                size="sm"
+                onClick={() => setShowDeactivateDialog(true)}
+              >
+                Geçersizleri Pasifleştir
+              </Button>
+            </div>
+          )}
+
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Telefon</TableHead>
+                <TableHead>Durum</TableHead>
+                <TableHead>Açıklama</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {sessionTestResults.map((result) => (
+                <TableRow key={result.account_id}>
+                  <TableCell className="font-mono text-sm">{result.phone_number}</TableCell>
+                  <TableCell>{getStatusBadge(result.status)}</TableCell>
+                  <TableCell className="text-sm text-muted-foreground">{result.message}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      </DialogContent>
+    </Dialog>
+
+    <AlertDialog open={showDeactivateDialog} onOpenChange={setShowDeactivateDialog}>
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Geçersiz Hesapları Pasifleştir</AlertDialogTitle>
+          <AlertDialogDescription>
+            Geçersiz oturum hatası alan {sessionTestResults.filter(r => r.status === 'invalid_session').length} hesap pasifleştirilecek.
+            Bu işlem geri alınamaz. Devam etmek istiyor musunuz?
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter>
+          <AlertDialogCancel>İptal</AlertDialogCancel>
+          <AlertDialogAction onClick={handleDeactivateInvalid}>
+            Pasifleştir
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+    </>
   );
 };
