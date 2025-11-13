@@ -52,16 +52,16 @@ export const AccountList = () => {
   });
 
   // Fetch account health status
-  const { data: healthStatuses = [] } = useQuery({
+  const { data: healthStatuses = [] } = useQuery<any[]>({
     queryKey: ['account-health', user?.id],
     queryFn: async () => {
       const accountIds = accounts.map(a => a.id);
       if (accountIds.length === 0) return [];
 
-      const { data, error } = await supabase
+      const { data, error } = await (supabase as any)
         .from('account_health_status')
         .select('*')
-        .in('account_id', accountIds);
+        .in('account_id', accountIds as any);
 
       if (error) throw error;
       return data || [];

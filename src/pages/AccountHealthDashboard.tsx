@@ -35,10 +35,10 @@ export default function AccountHealthDashboard() {
   const [isTesting, setIsTesting] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'all' | 'healthy' | 'issues'>('all');
 
-  const { data: accounts = [], isLoading } = useQuery({
+  const { data: accounts = [], isLoading } = useQuery<AccountWithHealth[]>({
     queryKey: ['accounts-with-health', user?.id],
     queryFn: async () => {
-      const { data: accountsData, error: accountsError } = await supabase
+      const { data: accountsData, error: accountsError } = await (supabase as any)
         .from('telegram_accounts')
         .select('id, phone_number, name, is_active')
         .eq('created_by', user?.id)
@@ -46,7 +46,7 @@ export default function AccountHealthDashboard() {
 
       if (accountsError) throw accountsError;
 
-      const { data: healthData, error: healthError } = await supabase
+      const { data: healthData, error: healthError } = await (supabase as any)
         .from('account_health_status')
         .select('*')
         .in('account_id', accountsData?.map(a => a.id) || []);
@@ -55,7 +55,7 @@ export default function AccountHealthDashboard() {
 
       return accountsData?.map(account => ({
         ...account,
-        health: healthData?.find(h => h.account_id === account.id)
+        health: (healthData as any)?.find((h: any) => h.account_id === account.id)
       })) || [];
     },
     enabled: !!user
@@ -106,7 +106,7 @@ export default function AccountHealthDashboard() {
     }
   };
 
-  const getStatusBadge = (status: HealthStatus) => {
+  const getStatusBadge = (status: string) => {
     const variants = {
       ok: { icon: CheckCircle2, label: 'Sağlıklı', className: 'bg-green-600 hover:bg-green-600' },
       invalid_session: { icon: XCircle, label: 'Geçersiz', className: 'bg-red-600 hover:bg-red-600' },
@@ -114,9 +114,10 @@ export default function AccountHealthDashboard() {
       connection_timeout: { icon: AlertTriangle, label: 'Zaman Aşımı', className: 'bg-gray-500 hover:bg-gray-500' },
       dc_migrate_required: { icon: RefreshCw, label: 'DC Migrasyon', className: 'bg-purple-600 hover:bg-purple-600' },
       unknown_error: { icon: AlertTriangle, label: 'Bilinmeyen', className: 'bg-orange-600 hover:bg-orange-600' }
-    };
+    } as const;
     
-    const config = variants[status];
+    const key = (status in variants ? status : 'unknown_error') as keyof typeof variants;
+    const config = variants[key];
     const Icon = config.icon;
     return (
       <Badge variant="default" className={config.className}>
