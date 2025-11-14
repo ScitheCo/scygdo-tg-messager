@@ -611,13 +611,324 @@ async function processSession(session: ScrapingSession) {
   log('info', `Batch processing completed for session ${session.id}`);
 }
 
+// Poll emoji tasks
+async function pollEmojiTasks() {
+  try {
+    const response = await fetch(`${SUPABASE_URL}/functions/v1/claim-emoji-task`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`
+      },
+      body: JSON.stringify({ worker_id: WORKER_ID })
+    });
+
+    if (!response.ok) return null;
+    const { task } = await response.json();
+    return task || null;
+  } catch (error) {
+    log('error', 'Poll emoji tasks error', error);
+    return null;
+  }
+}
+
+// Process emoji task
+async function processEmojiTask(task: any) {
+  const { id, task_type, post_link, custom_emojis, accounts, processed_account_ids } = task;
+  
+  log('info', `🎭 Processing emoji task ${id}: ${task_type}`);
+  
+  let successCount = 0;
+  let failCount = 0;
+
+  try {
+    const linkMatch = post_link.match(/t\.me\/(?:c\/)?([^/]+)\/(\d+)/);
+    if (!linkMatch) throw new Error('Invalid post link format');
+
+    const [_, groupIdentifier, messageId] = linkMatch;
+
+    for (const account of accounts) {
+      if (processed_account_ids.includes(account.id)) continue;
+
+      try {
+        const client = await getTelegramClient(account);
+        if (!client) {
+          failCount++;
+          continue;
+        }
+
+        let groupEntity = null;
+        try {
+          if (!groupIdentifier.match(/^\d+$/)) {
+            groupEntity = await client.getEntity(groupIdentifier);
+          }
+          if (!groupEntity) {
+            const dialogs = await client.getDialogs({ limit: 500 });
+            const match = dialogs.find((d: any) => {
+              const chatId = d?.entity?.id?.toString();
+              return chatId === groupIdentifier || d?.entity?.username === groupIdentifier;
+            });
+            groupEntity = match?.entity;
+          }
+        } catch (err) {
+          log('error', `Failed to resolve group for ${account.phone_number}:`, err);
+        }
+
+        if (!groupEntity) {
+          await supabase.from('emoji_task_logs').insert({
+            task_id: id,
+            account_id: account.id,
+            action_type: task_type,
+            status: 'error',
+            error_message: 'Group not found'
+          });
+          failCount++;
+          continue;
+        }
+
+        if (task_type === 'reaction') {
+          const emoji = custom_emojis && custom_emojis.length > 0 
+            ? custom_emojis[Math.floor(Math.random() * custom_emojis.length)]
+            : '👍';
+
+          await client.invoke(
+            new Api.messages.SendReaction({
+              peer: groupEntity,
+              msgId: parseInt(messageId),
+              reaction: [new Api.ReactionEmoji({ emoticon: emoji })]
+            })
+          );
+
+          await supabase.from('emoji_task_logs').insert({
+            task_id: id,
+            account_id: account.id,
+            action_type: 'reaction',
+            emoji_used: emoji,
+            status: 'success'
+          });
+
+          successCount++;
+          log('info', `✅ Reaction sent: ${account.phone_number} → ${emoji}`);
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 3000));
+
+      } catch (error: any) {
+        await supabase.from('emoji_task_logs').insert({
+          task_id: id,
+          account_id: account.id,
+          action_type: task_type,
+          status: 'error',
+          error_message: error.message || 'Unknown error'
+        });
+        failCount++;
+      }
+    }
+
+    await supabase.from('emoji_tasks').update({
+      status: 'completed',
+      completed_at: new Date().toISOString(),
+      total_success: successCount,
+      total_failed: failCount
+    }).eq('id', id);
+
+    log('info', `✅ Emoji task completed: ${successCount} success, ${failCount} failed`);
+
+  } catch (error: any) {
+    log('error', 'Emoji task processing error', error);
+    await supabase.from('emoji_tasks').update({
+      status: 'failed',
+      error_message: error.message,
+      completed_at: new Date().toISOString(),
+      total_success: successCount,
+      total_failed: failCount
+    }).eq('id', id);
+  }
+}
+
+// Poll health check requests
+async function pollHealthCheckRequests() {
+  try {
+    const { data: requests } = await supabase
+      .from('health_check_requests')
+      .select('*')
+      .eq('status', 'queued')
+      .order('created_at', { ascending: true })
+      .limit(1);
+
+    if (!requests || requests.length === 0) return null;
+
+    const request = requests[0];
+
+    const { error } = await supabase
+      .from('health_check_requests')
+      .update({
+        status: 'processing',
+        assigned_worker_id: WORKER_ID,
+        started_at: new Date().toISOString()
+      })
+      .eq('id', request.id)
+      .eq('status', 'queued');
+
+    if (error) return null;
+
+    return request;
+  } catch (error) {
+    log('error', 'Poll health check error', error);
+    return null;
+  }
+}
+
+// Process health check request
+async function processHealthCheckRequest(request: any) {
+  const { id, created_by, account_ids } = request;
+
+  log('info', `🏥 Processing health check request ${id}`);
+
+  try {
+    let accountsQuery = supabase
+      .from('telegram_accounts')
+      .select(`
+        id, session_string, phone_number, api_credential_id,
+        telegram_api_credentials!inner (api_id, api_hash)
+      `)
+      .eq('is_active', true)
+      .not('session_string', 'is', null);
+
+    if (account_ids && account_ids.length > 0) {
+      accountsQuery = accountsQuery.in('id', account_ids);
+    } else {
+      accountsQuery = accountsQuery.eq('created_by', created_by);
+    }
+
+    const { data: accounts } = await accountsQuery;
+
+    if (!accounts || accounts.length === 0) {
+      await supabase.from('health_check_requests').update({
+        status: 'failed',
+        error_message: 'No accounts found',
+        finished_at: new Date().toISOString()
+      }).eq('id', id);
+      return;
+    }
+
+    log('info', `Testing ${accounts.length} accounts`);
+
+    const concurrency = 3;
+    for (let i = 0; i < accounts.length; i += concurrency) {
+      const batch = accounts.slice(i, i + concurrency);
+      await Promise.all(batch.map(account => testAccountSession(account)));
+    }
+
+    await supabase.from('health_check_requests').update({
+      status: 'done',
+      finished_at: new Date().toISOString()
+    }).eq('id', id);
+
+    log('info', `✅ Health check completed for ${accounts.length} accounts`);
+
+  } catch (error: any) {
+    log('error', 'Health check processing error', error);
+    await supabase.from('health_check_requests').update({
+      status: 'failed',
+      error_message: error.message,
+      finished_at: new Date().toISOString()
+    }).eq('id', id);
+  }
+}
+
+// Test single account session
+async function testAccountSession(account: any) {
+  const { id, session_string, phone_number, telegram_api_credentials } = account;
+  const { api_id, api_hash } = telegram_api_credentials;
+
+  log('info', `Testing session: ${phone_number}`);
+
+  let status = 'ok';
+  let errorMessage = null;
+
+  try {
+    const client = new TelegramClient(
+      new StringSession(session_string),
+      parseInt(api_id),
+      api_hash,
+      {
+        connectionRetries: 5,
+        timeout: 30000,
+        autoReconnect: true,
+        useWSS: false
+      }
+    );
+
+    for (let retry = 0; retry < 5; retry++) {
+      try {
+        await client.connect();
+        break;
+      } catch (err) {
+        if (retry === 4) throw err;
+        await new Promise(resolve => setTimeout(resolve, Math.min(1000 * Math.pow(2, retry), 10000)));
+      }
+    }
+
+    await client.getMe();
+    await client.disconnect();
+
+    await supabase.from('account_health_status').upsert({
+      account_id: id,
+      last_checked: new Date().toISOString(),
+      status: 'ok',
+      error_message: null,
+      consecutive_failures: 0,
+      last_success: new Date().toISOString()
+    }, { onConflict: 'account_id' });
+
+    log('info', `✅ Session OK: ${phone_number}`);
+
+  } catch (error: any) {
+    const errorCode = error.errorMessage || error.message || '';
+
+    if (errorCode.includes('AUTH_KEY_UNREGISTERED') || 
+        errorCode.includes('SESSION_REVOKED') ||
+        errorCode.includes('USER_DEACTIVATED')) {
+      status = 'invalid_session';
+    } else if (errorCode.includes('FLOOD') || errorCode.includes('TOO_MANY')) {
+      status = 'rate_limited';
+    } else if (errorCode.includes('timeout') || errorCode.includes('ETIMEDOUT')) {
+      status = 'connection_timeout';
+    } else if (errorCode.includes('MIGRATE')) {
+      status = 'dc_migrate_required';
+    } else {
+      status = 'unknown_error';
+    }
+
+    errorMessage = error.message;
+
+    const { data: existing } = await supabase
+      .from('account_health_status')
+      .select('consecutive_failures')
+      .eq('account_id', id)
+      .single();
+
+    const consecutiveFailures = (existing?.consecutive_failures || 0) + 1;
+
+    await supabase.from('account_health_status').upsert({
+      account_id: id,
+      last_checked: new Date().toISOString(),
+      status,
+      error_message: errorMessage,
+      consecutive_failures: consecutiveFailures
+    }, { onConflict: 'account_id' });
+
+    log('warn', `⚠️ Session failed: ${phone_number} - ${status}`);
+  }
+}
+
 // Main loop
 async function mainLoop() {
   log('info', '🔄 Starting main loop...');
 
   while (!isShuttingDown) {
     try {
-      // Guard: Wait if Supabase not ready
       if (!supabase) {
         log('warn', 'Supabase not initialized, waiting...');
         await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
@@ -626,7 +937,19 @@ async function mainLoop() {
 
       await sendHeartbeat();
 
-      // Get running sessions
+      // 1. Check for emoji tasks
+      const emojiTask = await pollEmojiTasks();
+      if (emojiTask) {
+        await processEmojiTask(emojiTask);
+      }
+
+      // 2. Check for health check requests
+      const healthRequest = await pollHealthCheckRequests();
+      if (healthRequest) {
+        await processHealthCheckRequest(healthRequest);
+      }
+
+      // 3. Process scraping sessions
       const { data: sessions, error } = await supabase
         .from('scraping_sessions')
         .select('*')
@@ -650,7 +973,6 @@ async function mainLoop() {
       log('error', 'Main loop error', error);
     }
 
-    // Wait before next poll
     await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL));
   }
 

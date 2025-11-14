@@ -46,6 +46,50 @@ export type Database = {
           },
         ]
       }
+      account_health_status: {
+        Row: {
+          account_id: string
+          consecutive_failures: number
+          created_at: string
+          error_message: string | null
+          id: string
+          last_checked: string | null
+          last_success: string | null
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          account_id: string
+          consecutive_failures?: number
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          last_checked?: string | null
+          last_success?: string | null
+          status: string
+          updated_at?: string
+        }
+        Update: {
+          account_id?: string
+          consecutive_failures?: number
+          created_at?: string
+          error_message?: string | null
+          id?: string
+          last_checked?: string | null
+          last_success?: string | null
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "account_health_status_account_id_fkey"
+            columns: ["account_id"]
+            isOneToOne: true
+            referencedRelation: "telegram_accounts"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       authorized_bot_users: {
         Row: {
           added_by: string | null
@@ -271,6 +315,42 @@ export type Database = {
           telegram_username?: string
           total_failed?: number
           total_success?: number
+        }
+        Relationships: []
+      }
+      health_check_requests: {
+        Row: {
+          account_ids: Json | null
+          assigned_worker_id: string | null
+          created_at: string | null
+          created_by: string
+          error_message: string | null
+          finished_at: string | null
+          id: string
+          started_at: string | null
+          status: string
+        }
+        Insert: {
+          account_ids?: Json | null
+          assigned_worker_id?: string | null
+          created_at?: string | null
+          created_by: string
+          error_message?: string | null
+          finished_at?: string | null
+          id?: string
+          started_at?: string | null
+          status?: string
+        }
+        Update: {
+          account_ids?: Json | null
+          assigned_worker_id?: string | null
+          created_at?: string | null
+          created_by?: string
+          error_message?: string | null
+          finished_at?: string | null
+          id?: string
+          started_at?: string | null
+          status?: string
         }
         Relationships: []
       }

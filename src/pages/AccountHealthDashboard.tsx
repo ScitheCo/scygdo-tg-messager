@@ -63,20 +63,35 @@ export default function AccountHealthDashboard() {
 
   const handleTestAll = async () => {
     setIsTesting(true);
-    const toastId = toast.loading('Tüm hesaplar test ediliyor...');
-
     try {
-      const { error } = await supabase.functions.invoke('validate-telegram-sessions', {
-        body: { deactivate_invalid: false }
+      const accountIds = statusFilter === 'all' 
+        ? null 
+        : accounts
+            .filter(a => statusFilter === 'issues' ? a.health?.status !== 'ok' : a.health?.status === 'ok')
+            .map(a => a.id);
+
+      const { data, error } = await supabase.functions.invoke('request-health-check', {
+        body: { account_ids: accountIds }
       });
 
       if (error) throw error;
 
-      await queryClient.invalidateQueries({ queryKey: ['accounts-with-health'] });
-      toast.success('Test tamamlandı', { id: toastId });
+      toast.success('Hesap sağlık kontrolü kuyruğa eklendi. Desktop worker işlemeye başlayacak.');
+
+      // Poll for updates
+      const pollInterval = setInterval(async () => {
+        await queryClient.invalidateQueries({ queryKey: ['accounts-with-health'] });
+      }, 3000);
+
+      // Stop polling after 60 seconds
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        setIsTesting(false);
+      }, 60000);
+
     } catch (error: any) {
-      toast.error('Test başarısız: ' + error.message, { id: toastId });
-    } finally {
+      console.error('Test error:', error);
+      toast.error(error.message || 'Test başlatılamadı');
       setIsTesting(false);
     }
   };
