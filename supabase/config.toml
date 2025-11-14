@@ -23,3 +23,6 @@ verify_jwt = false
 
 [functions.claim-emoji-task]
 verify_jwt = false
+
+[functions.request-health-check]
+verify_jwt = true
