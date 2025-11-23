@@ -1,4 +1,3 @@
-import 'dotenv/config';
 import * as http from 'http';
 import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions';
