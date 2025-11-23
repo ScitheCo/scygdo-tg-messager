@@ -8,7 +8,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
-import { Trash2, Plus, Play, AlertCircle, RotateCw } from "lucide-react";
+import { Trash2, Plus, AlertCircle, RotateCw } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 
 interface AuthorizedUser {
@@ -60,11 +60,7 @@ export default function EmojiPanel() {
   const [tasks, setTasks] = useState<EmojiTask[]>([]);
   const [logs, setLogs] = useState<TaskLog[]>([]);
   const [newUsername, setNewUsername] = useState("");
-  const [isStartingWorker, setIsStartingWorker] = useState(false);
-  const [workerStatus, setWorkerStatus] = useState<{
-    onlineCount: number;
-    workers: WorkerStatus[];
-  }>({ onlineCount: 0, workers: [] });
+  const [workerStatus, setWorkerStatus] = useState<WorkerStatus | null>(null);
   const [stats, setStats] = useState({
     total: 0,
     queued: 0,
@@ -72,7 +68,6 @@ export default function EmojiPanel() {
     failed: 0,
   });
   const { toast } = useToast();
-  const autoTriggerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     fetchAuthorizedUsers();
@@ -88,33 +83,8 @@ export default function EmojiPanel() {
     const queued = tasks.filter(t => t.status === 'queued').length;
     const completed = tasks.filter(t => t.status === 'completed').length;
     const failed = tasks.filter(t => t.status === 'failed').length;
-    const processing = tasks.filter(t => t.status === 'processing').length;
     setStats({ total, queued, completed, failed });
-
-    // Auto-trigger worker if there are queued or processing tasks
-    if (queued > 0 || processing > 0) {
-      if (!autoTriggerRef.current) {
-        autoTriggerRef.current = setInterval(() => {
-          console.log('Auto-triggering worker...');
-          triggerWorker(true);
-        }, 10000); // Every 10 seconds
-      }
-    } else {
-      if (autoTriggerRef.current) {
-        clearInterval(autoTriggerRef.current);
-        autoTriggerRef.current = null;
-      }
-    }
   }, [tasks]);
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      if (autoTriggerRef.current) {
-        clearInterval(autoTriggerRef.current);
-      }
-    };
-  }, []);
 
   const subscribeToChanges = () => {
     const tasksChannel = supabase
@@ -198,20 +168,17 @@ export default function EmojiPanel() {
     const { data, error } = await supabase
       .from('worker_heartbeats')
       .select('*')
-      .eq('worker_type', 'desktop')
+      .eq('worker_id', 'telegram-inviter')
       .gte('last_seen', new Date(Date.now() - 60000).toISOString())
-      .order('last_seen', { ascending: false });
+      .single();
 
     if (error) {
       console.error('Worker status fetch error:', error);
+      setWorkerStatus(null);
       return;
     }
 
-    const onlineWorkers = data?.filter(w => w.status === 'online') || [];
-    setWorkerStatus({
-      onlineCount: onlineWorkers.length,
-      workers: data || []
-    });
+    setWorkerStatus(data);
   };
 
   const handleAddUser = async () => {
@@ -250,40 +217,36 @@ export default function EmojiPanel() {
     fetchAuthorizedUsers();
   };
 
-  const triggerWorker = async (isAuto = false) => {
-    if (!isAuto) setIsStartingWorker(true);
+  const handleClearAllTasks = async () => {
+    if (!confirm('Tüm görevler silinecek. Emin misiniz?')) return;
     
     try {
-      const { error } = await supabase.functions.invoke('process-emoji-tasks');
-      
+      const { error } = await supabase
+        .from('emoji_tasks')
+        .delete()
+        .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all
+
       if (error) {
-        console.error('Worker trigger error:', error);
-        if (!isAuto) {
-          toast({ 
-            title: "Hata", 
-            description: "İşçi başlatılamadı: " + error.message, 
-            variant: "destructive" 
-          });
-        }
-      } else {
-        if (!isAuto) {
-          toast({ 
-            title: "Başarılı", 
-            description: "Görev işçisi başlatıldı" 
-          });
-        }
-      }
-    } catch (error) {
-      console.error('Worker trigger error:', error);
-      if (!isAuto) {
         toast({ 
           title: "Hata", 
-          description: "İşçi başlatılamadı", 
+          description: "Görevler silinemedi: " + error.message, 
           variant: "destructive" 
         });
+        return;
       }
-    } finally {
-      if (!isAuto) setIsStartingWorker(false);
+
+      toast({ 
+        title: "Başarılı", 
+        description: "Tüm görevler silindi" 
+      });
+
+      fetchTasks();
+    } catch (error) {
+      toast({ 
+        title: "Hata", 
+        description: "Görevler silinemedi", 
+        variant: "destructive" 
+      });
     }
   };
 
@@ -310,48 +273,10 @@ export default function EmojiPanel() {
         title: "Başarılı", 
         description: "Görev tekrar sıraya alındı" 
       });
-
-      // Trigger worker after resetting
-      triggerWorker();
     } catch (error) {
       toast({ 
         title: "Hata", 
         description: "Görev sıfırlanamadı", 
-        variant: "destructive" 
-      });
-    }
-  };
-
-  const handleFailAllPending = async () => {
-    try {
-      const { error } = await supabase
-        .from('emoji_tasks')
-        .update({ 
-          status: 'failed',
-          error_message: 'Yönetici tarafından iptal edildi',
-          completed_at: new Date().toISOString()
-        })
-        .in('status', ['queued', 'processing']);
-
-      if (error) {
-        toast({ 
-          title: "Hata", 
-          description: "Görevler güncellenemedi: " + error.message, 
-          variant: "destructive" 
-        });
-        return;
-      }
-
-      toast({ 
-        title: "Başarılı", 
-        description: "Tüm bekleyen görevler iptal edildi" 
-      });
-
-      fetchTasks();
-    } catch (error) {
-      toast({ 
-        title: "Hata", 
-        description: "Görevler güncellenemedi", 
         variant: "destructive" 
       });
     }
@@ -392,42 +317,14 @@ export default function EmojiPanel() {
     <div className="min-h-screen bg-background">
       <Header />
       <main className="container mx-auto px-4 py-8 space-y-6">
-        {/* Worker Control */}
-        {stats.queued > 0 && (
-          <Alert>
-            <AlertCircle className="h-4 w-4" />
-            <AlertDescription className="flex items-center justify-between">
-              <span>Sırada {stats.queued} görev var</span>
-              <div className="flex gap-2">
-                <Button 
-                  size="sm" 
-                  onClick={() => triggerWorker()}
-                  disabled={isStartingWorker}
-                >
-                  <Play className="mr-2 h-4 w-4" />
-                  {isStartingWorker ? 'Başlatılıyor...' : 'İşçiyi Başlat'}
-                </Button>
-                <Button 
-                  size="sm"
-                  variant="destructive"
-                  onClick={handleFailAllPending}
-                >
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Bekleyenleri İptal Et
-                </Button>
-              </div>
-            </AlertDescription>
-          </Alert>
-        )}
-
         {/* Worker Status */}
-        <Card className={workerStatus.onlineCount > 0 ? 'border-green-500' : 'border-destructive'}>
+        <Card className={workerStatus?.status === 'online' ? 'border-green-500' : 'border-destructive'}>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm font-medium flex items-center justify-between">
-              <span>🖥️ Desktop Worker Durumu</span>
-              {workerStatus.onlineCount > 0 ? (
+              <span>☁️ Railway Worker Durumu</span>
+              {workerStatus?.status === 'online' ? (
                 <Badge variant="default" className="bg-green-500 text-white">
-                  🟢 Online ({workerStatus.onlineCount})
+                  🟢 Online
                 </Badge>
               ) : (
                 <Badge variant="destructive">
@@ -436,37 +333,42 @@ export default function EmojiPanel() {
               )}
             </CardTitle>
           </CardHeader>
-          <CardContent className="space-y-2">
-            {workerStatus.workers.length > 0 ? (
-              workerStatus.workers.map((worker) => (
-                <div key={worker.worker_id} className="flex items-center justify-between text-sm p-2 rounded bg-muted/50">
+          <CardContent>
+            {workerStatus ? (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between text-sm p-2 rounded bg-muted/50">
                   <div>
-                    <div className="font-medium">{worker.worker_id}</div>
+                    <div className="font-medium">telegram-inviter</div>
                     <div className="text-xs text-muted-foreground">
-                      {worker.machine_info?.os || 'Unknown OS'} | {worker.machine_info?.hostname || 'Unknown Host'}
+                      Railway Cloud · {workerStatus.version || 'v1.0'}
                     </div>
                   </div>
                   <div className="text-right">
-                    <div className={worker.status === 'online' ? 'text-green-500 font-medium' : 'text-destructive font-medium'}>
-                      {worker.status}
+                    <div className={workerStatus.status === 'online' ? 'text-green-500 font-medium' : 'text-destructive font-medium'}>
+                      {workerStatus.status}
                     </div>
                     <div className="text-xs text-muted-foreground">
-                      {formatDate(worker.last_seen)}
+                      Son: {formatDate(workerStatus.last_seen)}
                     </div>
                   </div>
                 </div>
-              ))
+                {stats.queued > 0 && (
+                  <Alert>
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertDescription className="text-xs">
+                      ⏳ Sırada {stats.queued} görev var, otomatik işlenecek
+                    </AlertDescription>
+                  </Alert>
+                )}
+              </div>
             ) : (
-              <p className="text-sm text-muted-foreground">
-                Henüz hiçbir desktop worker bağlanmadı. Desktop worker uygulamasını başlatın.
-              </p>
+              <Alert variant="destructive">
+                <AlertCircle className="h-4 w-4" />
+                <AlertDescription>
+                  Worker çevrimdışı. Railway deployment kontrol edin.
+                </AlertDescription>
+              </Alert>
             )}
-            <Alert className="mt-2">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription className="text-xs">
-                💡 Desktop worker çevrimdışıyken görevler oluşturulamaz.
-              </AlertDescription>
-            </Alert>
           </CardContent>
         </Card>
 
@@ -563,8 +465,18 @@ export default function EmojiPanel() {
 
         {/* Task List */}
         <Card>
-          <CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle>📋 Görev Listesi</CardTitle>
+            {tasks.length > 0 && (
+              <Button 
+                variant="destructive" 
+                size="sm"
+                onClick={handleClearAllTasks}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                Tümünü Sil
+              </Button>
+            )}
           </CardHeader>
           <CardContent>
             <ScrollArea className="h-96">
