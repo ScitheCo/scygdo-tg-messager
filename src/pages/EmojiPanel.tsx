@@ -509,19 +509,41 @@ export default function EmojiPanel() {
                       <TableCell>
                         <Badge variant="outline">{getTaskTypeBadge(task.task_type)}</Badge>
                       </TableCell>
-                      <TableCell>{task.requested_count}/{task.available_count}</TableCell>
                       <TableCell>
-                        <Badge variant={getStatusVariant(task.status)}>
-                          {task.status}
+                        <div className="flex items-center gap-2">
+                          <span className="text-sm">{task.requested_count}/{task.available_count}</span>
+                          <div className="w-20 bg-muted rounded-full h-2">
+                            <div 
+                              className="bg-primary h-2 rounded-full transition-all"
+                              style={{ width: `${(task.total_success / task.requested_count) * 100}%` }}
+                            />
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell>
+                        <Badge variant={getStatusVariant(task.status)} className="min-w-[80px] justify-center">
+                          {task.status === 'queued' && '⏳ Sırada'}
+                          {task.status === 'processing' && '🔄 İşleniyor'}
+                          {task.status === 'completed' && '✅ Tamamlandı'}
+                          {task.status === 'failed' && '❌ Başarısız'}
                         </Badge>
                       </TableCell>
                       <TableCell>
-                        <span className="text-green-500">{task.total_success}</span> / 
-                        <span className="text-red-500 ml-1">{task.total_failed}</span>
+                        <div className="flex flex-col gap-1 text-sm">
+                          <div className="flex items-center gap-2">
+                            <span className="text-green-500 font-medium">✓ {task.total_success}</span>
+                            <span className="text-red-500 font-medium">✗ {task.total_failed}</span>
+                          </div>
+                          {task.requested_count > 0 && (
+                            <span className="text-xs text-muted-foreground">
+                              {Math.round(((task.total_success + task.total_failed) / task.requested_count) * 100)}% işlendi
+                            </span>
+                          )}
+                        </div>
                       </TableCell>
                       <TableCell className="text-xs">{formatDate(task.created_at)}</TableCell>
                       <TableCell className="text-right">
-                        {task.status === 'processing' && (
+                        {(task.status === 'processing' || task.status === 'failed') && (
                           <Button
                             variant="outline"
                             size="sm"

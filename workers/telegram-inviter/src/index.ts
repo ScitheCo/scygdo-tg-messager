@@ -658,19 +658,28 @@ async function processEmojiTask(task: any) {
 
         let groupEntity = null;
         try {
-          if (!groupIdentifier.match(/^\d+$/)) {
-            groupEntity = await client.getEntity(groupIdentifier);
+          // Try username first
+          if (groupIdentifier.startsWith('@') || !groupIdentifier.match(/^\d+$/)) {
+            try {
+              groupEntity = await client.getEntity(groupIdentifier);
+            } catch (e) {
+              log('debug', `Direct entity resolution failed for ${groupIdentifier}`);
+            }
           }
+          
+          // Try from dialogs
           if (!groupEntity) {
             const dialogs = await client.getDialogs({ limit: 500 });
             const match = dialogs.find((d: any) => {
-              const chatId = d?.entity?.id?.toString();
-              return chatId === groupIdentifier || d?.entity?.username === groupIdentifier;
+              const username = d?.entity?.username;
+              const title = d?.entity?.title?.toLowerCase();
+              const searchTerm = groupIdentifier.replace('@', '').toLowerCase();
+              return username === searchTerm || title?.includes(searchTerm);
             });
             groupEntity = match?.entity;
           }
-        } catch (err) {
-          log('error', `Failed to resolve group for ${account.phone_number}:`, err);
+        } catch (err: any) {
+          log('error', `Failed to resolve group for ${account.phone_number}:`, err.message);
         }
 
         if (!groupEntity) {
@@ -678,49 +687,61 @@ async function processEmojiTask(task: any) {
             task_id: id,
             account_id: account.id,
             action_type: task_type,
-            status: 'error',
-            error_message: 'Group not found'
+            status: 'failed',
+            error_message: `Group '${groupIdentifier}' not found or not accessible`,
+            worker_id: WORKER_ID
           });
           failCount++;
           continue;
         }
 
-        if (task_type === 'reaction') {
-          const emoji = custom_emojis && custom_emojis.length > 0 
-            ? custom_emojis[Math.floor(Math.random() * custom_emojis.length)]
-            : '👍';
-
-          await client.invoke(
-            new Api.messages.SendReaction({
-              peer: groupEntity,
-              msgId: parseInt(messageId),
-              reaction: [new Api.ReactionEmoji({ emoticon: emoji })]
-            })
-          );
-
-          await supabase.from('emoji_task_logs').insert({
-            task_id: id,
-            account_id: account.id,
-            action_type: 'reaction',
-            emoji_used: emoji,
-            status: 'success'
-          });
-
-          successCount++;
-          log('info', `✅ Reaction sent: ${account.phone_number} → ${emoji}`);
+        // Determine emoji based on task type
+        let emoji = '👍';
+        if (task_type === 'positive_emoji') {
+          const positiveEmojis = ['👍', '❤️', '🔥', '🎉', '💯'];
+          emoji = positiveEmojis[Math.floor(Math.random() * positiveEmojis.length)];
+        } else if (task_type === 'negative_emoji') {
+          const negativeEmojis = ['👎', '💩', '😢'];
+          emoji = negativeEmojis[Math.floor(Math.random() * negativeEmojis.length)];
+        } else if (task_type === 'custom_emoji' && custom_emojis && custom_emojis.length > 0) {
+          emoji = custom_emojis[Math.floor(Math.random() * custom_emojis.length)];
         }
 
-        await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 3000));
+        // Send reaction
+        await client.invoke(
+          new Api.messages.SendReaction({
+            peer: groupEntity,
+            msgId: parseInt(messageId),
+            reaction: [new Api.ReactionEmoji({ emoticon: emoji })]
+          })
+        );
 
-      } catch (error: any) {
         await supabase.from('emoji_task_logs').insert({
           task_id: id,
           account_id: account.id,
           action_type: task_type,
-          status: 'error',
-          error_message: error.message || 'Unknown error'
+          emoji_used: emoji,
+          status: 'success',
+          worker_id: WORKER_ID
+        });
+
+        successCount++;
+        log('info', `✅ Reaction sent: ${account.phone_number} → ${emoji}`);
+
+        await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 3000));
+
+      } catch (error: any) {
+        const errorMsg = error.errorMessage || error.message || 'Unknown error';
+        await supabase.from('emoji_task_logs').insert({
+          task_id: id,
+          account_id: account.id,
+          action_type: task_type,
+          status: 'failed',
+          error_message: errorMsg,
+          worker_id: WORKER_ID
         });
         failCount++;
+        log('error', `❌ Reaction failed for ${account.phone_number}: ${errorMsg}`);
       }
     }
 
