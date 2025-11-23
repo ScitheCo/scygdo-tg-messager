@@ -255,20 +255,20 @@ async function handleConversationStep(supabase: any, state: any, message: any) {
         .eq('telegram_user_id', userId)
         .single();
 
-      // Check if any desktop workers are online
-      const { data: onlineWorkers } = await supabase
+      // Check if Railway worker is online
+      const { data: railwayWorker } = await supabase
         .from('worker_heartbeats')
-        .select('worker_id')
-        .eq('worker_type', 'desktop')
-        .eq('status', 'online')
-        .gte('last_seen', new Date(Date.now() - 60000).toISOString()); // Last minute
+        .select('worker_id, status')
+        .eq('worker_id', 'telegram-inviter')
+        .gte('last_seen', new Date(Date.now() - 60000).toISOString())
+        .single();
 
-      // Block task creation if no workers are online
-      if (!onlineWorkers || onlineWorkers.length === 0) {
+      // Block task creation if worker is not online
+      if (!railwayWorker || railwayWorker.status !== 'online') {
         await sendMessage(
           chatId, 
           '❌ Sistem şu anda aktif değil.\n\n' +
-          'Desktop worker çevrimdışı. Lütfen daha sonra tekrar deneyin veya ' +
+          'Worker çevrimdışı. Lütfen daha sonra tekrar deneyin veya ' +
           'panel yöneticisine bilgi verin.\n\n' +
           'Yeni görev oluşturmak için /start komutunu kullanın.'
         );
@@ -282,12 +282,12 @@ async function handleConversationStep(supabase: any, state: any, message: any) {
           })
           .eq('telegram_user_id', userId);
         
-        console.log('Task creation blocked: No online workers');
+        console.log('Task creation blocked: Railway worker offline');
         return;
       }
 
-      const processingMode = 'desktop_worker';
-      console.log(`Processing mode: ${processingMode} (${onlineWorkers.length} online workers)`);
+      const processingMode = 'edge_function';
+      console.log(`Processing mode: ${processingMode} (Railway worker online)`);
 
       // Get next queue number
       const { data: lastTask } = await supabase
