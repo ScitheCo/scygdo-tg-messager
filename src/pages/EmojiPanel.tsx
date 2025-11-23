@@ -256,7 +256,11 @@ export default function EmojiPanel() {
         .from('emoji_tasks')
         .update({ 
           status: 'queued',
-          started_at: null
+          started_at: null,
+          completed_at: null,
+          assigned_worker_id: null,
+          error_message: null,
+          processing_mode: 'desktop_worker',
         })
         .eq('id', taskId);
 

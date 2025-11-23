@@ -32,7 +32,6 @@ serve(async (req) => {
       .from('worker_heartbeats')
       .select('*')
       .eq('worker_id', worker_id)
-      .eq('worker_type', 'desktop')
       .eq('status', 'online')
       .gte('last_seen', new Date(Date.now() - 60000).toISOString()) // Last minute
       .single();
