@@ -624,7 +624,7 @@ async function pollEmojiTasks() {
     });
 
     if (!response.ok) return null;
-    const { task } = await response.json();
+    const { task } = await response.json() as { task: any };
     return task || null;
   } catch (error) {
     log('error', 'Poll emoji tasks error', error);
