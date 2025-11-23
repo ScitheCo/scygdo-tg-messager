@@ -286,7 +286,7 @@ async function handleConversationStep(supabase: any, state: any, message: any) {
         return;
       }
 
-      const processingMode = 'edge_function';
+      const processingMode = 'desktop_worker';
       console.log(`Processing mode: ${processingMode} (Railway worker online)`);
 
       // Get next queue number
@@ -332,24 +332,7 @@ async function handleConversationStep(supabase: any, state: any, message: any) {
         })
         .eq('telegram_user_id', userId);
 
-      await sendMessage(chatId, `✅ Göreviniz kuyruğa eklendi!\n🔢 Sıra numaranız: #${queueNumber}\n\nİşlem tamamlandığında bildirim alacaksınız.`);
-      
-      // Trigger worker with retry
-      try {
-        await supabase.functions.invoke('process-emoji-tasks');
-        console.log('Worker triggered successfully');
-      } catch (error) {
-        console.error('Failed to trigger worker, retrying in 2s:', error);
-        // Retry after 2 seconds
-        setTimeout(async () => {
-          try {
-            await supabase.functions.invoke('process-emoji-tasks');
-            console.log('Worker triggered on retry');
-          } catch (retryError) {
-            console.error('Failed to trigger worker on retry:', retryError);
-          }
-        }, 2000);
-      }
+      await sendMessage(chatId, `✅ Göreviniz kuyruğa eklendi!\n🔢 Sıra numaranız: #${queueNumber}\n\n🤖 Railway worker otomatik olarak işleme başlayacak.\n📊 Durumu panelden takip edebilirsiniz.`);
       break;
   }
 }
