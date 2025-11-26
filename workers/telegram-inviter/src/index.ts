@@ -1,4 +1,9 @@
+// MUST BE FIRST - Node.js polyfills for GramJS
+import './polyfill';
+
 import * as http from 'http';
+import { TelegramClient, Api } from 'telegram';
+import { StringSession } from 'telegram/sessions';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   ScrapingSession,
@@ -6,16 +11,6 @@ import {
   ScrapedMember,
   PERMANENT_ERRORS
 } from './types';
-
-// Telegram library will be loaded dynamically to ensure correct Node globals
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type TelegramClient = any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let TelegramLib: any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let Api: any;
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let StringSession: any;
 
 // Environment variables
 const SUPABASE_URL = process.env.SUPABASE_URL || '';
@@ -38,22 +33,6 @@ function log(level: string, message: string, data?: any) {
   if (LOG_LEVEL === 'debug' || level !== 'debug') {
     const timestamp = new Date().toISOString();
     console.log(`[${timestamp}] [${level.toUpperCase()}] ${message}`, data || '');
-  }
-}
-
-// Initialize Telegram library lazily with proper Node globals
-function initTelegram() {
-  if (!TelegramLib) {
-    // Ensure a browser-like global for GramJS when running in Node
-    if (typeof (globalThis as any).self === 'undefined') {
-      (globalThis as any).self = globalThis;
-    }
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    TelegramLib = require('telegram');
-    Api = TelegramLib.Api;
-    // eslint-disable-next-line @typescript-eslint/no-var-requires
-    StringSession = require('telegram/sessions').StringSession;
-    log('info', `- [Running gramJS version ${TelegramLib.version || 'unknown'}]`);
   }
 }
 
@@ -127,11 +106,10 @@ async function getTelegramClient(account: any): Promise<TelegramClient | null> {
   }
 
   try {
-    initTelegram();
     log('info', `🔌 Connecting account ${account.phone_number}...`);
     
     const stringSession = new StringSession(account.session_string || '');
-    const client = new TelegramLib.TelegramClient(
+    const client = new TelegramClient(
       stringSession,
       parseInt(account.telegram_api_credentials.api_id),
       account.telegram_api_credentials.api_hash,
@@ -893,8 +871,7 @@ async function testAccountSession(account: any) {
   let errorMessage = null;
 
   try {
-    initTelegram();
-    const client = new TelegramLib.TelegramClient(
+    const client = new TelegramClient(
       new StringSession(session_string),
       parseInt(api_id),
       api_hash,
