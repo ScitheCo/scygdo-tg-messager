@@ -653,12 +653,37 @@ async function pollEmojiTasks() {
   }
 }
 
+// Send Telegram notification
+async function sendTelegramNotification(chatId: number, message: string) {
+  const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+  if (!TELEGRAM_BOT_TOKEN) {
+    log('warn', 'TELEGRAM_BOT_TOKEN not set, skipping notification');
+    return;
+  }
+  
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        chat_id: chatId, 
+        text: message, 
+        parse_mode: 'HTML' 
+      })
+    });
+    log('info', `✅ Notification sent to chat ${chatId}`);
+  } catch (error) {
+    log('error', 'Failed to send Telegram notification', error);
+  }
+}
+
 // Process emoji task
 async function processEmojiTask(task: any) {
-  const { id, task_type, post_link, custom_emojis, accounts, processed_account_ids } = task;
+  const { id, task_type, post_link, custom_emojis, accounts, processed_account_ids, chat_id, telegram_username, requested_count } = task;
   
   log('info', `🎭 Processing emoji task ${id}: ${task_type}`);
   
+  const startTime = Date.now();
   let successCount = 0;
   let failCount = 0;
 
@@ -750,6 +775,12 @@ async function processEmojiTask(task: any) {
         successCount++;
         log('info', `✅ Reaction sent: ${account.phone_number} → ${emoji}`);
 
+        // Real-time progress update after each account
+        await supabase.from('emoji_tasks').update({
+          total_success: successCount,
+          total_failed: failCount
+        }).eq('id', id);
+
         await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 3000));
 
       } catch (error: any) {
@@ -764,6 +795,12 @@ async function processEmojiTask(task: any) {
         });
         failCount++;
         log('error', `❌ Reaction failed for ${account.phone_number}: ${errorMsg}`);
+        
+        // Real-time progress update after each failure
+        await supabase.from('emoji_tasks').update({
+          total_success: successCount,
+          total_failed: failCount
+        }).eq('id', id);
       }
     }
 
@@ -775,6 +812,24 @@ async function processEmojiTask(task: any) {
     }).eq('id', id);
 
     log('info', `✅ Emoji task completed: ${successCount} success, ${failCount} failed`);
+    
+    // Send detailed completion notification to user
+    const duration = Math.round((Date.now() - startTime) / 1000);
+    const statusEmoji = failCount === 0 ? '✅' : successCount > 0 ? '⚠️' : '❌';
+    const notificationMessage = `${statusEmoji} <b>Görev Tamamlandı!</b>
+
+📊 <b>Sonuç:</b>
+├ ✅ Başarılı: ${successCount}
+├ ❌ Başarısız: ${failCount}
+└ 📝 Toplam: ${successCount + failCount}/${requested_count}
+
+🎯 Görev: ${getTaskTypeName(task_type)}
+🔗 Post: ${post_link}
+⏱️ Süre: ${duration} saniye
+
+${failCount > 0 ? '💡 Başarısız hesaplar log panelinde görüntülenebilir.' : ''}`;
+
+    await sendTelegramNotification(chat_id, notificationMessage);
 
   } catch (error: any) {
     log('error', 'Emoji task processing error', error);
@@ -785,7 +840,29 @@ async function processEmojiTask(task: any) {
       total_success: successCount,
       total_failed: failCount
     }).eq('id', id);
+    
+    // Send failure notification
+    const notificationMessage = `❌ <b>Görev Başarısız!</b>
+
+🔢 Görev ID: ${id}
+🎯 Tip: ${getTaskTypeName(task_type)}
+⚠️ Hata: ${error.message}
+
+Lütfen panel yöneticisine bildirin.`;
+    
+    await sendTelegramNotification(chat_id, notificationMessage);
   }
+}
+
+// Helper function for task type names
+function getTaskTypeName(type: string): string {
+  const types: Record<string, string> = {
+    positive_emoji: '📈 Pozitif Emoji',
+    negative_emoji: '📉 Negatif Emoji',
+    view_only: '👁️ Görüntüleme',
+    custom_emoji: '🎨 Özel Emoji',
+  };
+  return types[type] || type;
 }
 
 // Poll health check requests
