@@ -1,3 +1,7 @@
 [build]
 builder = "dockerfile"
 dockerfilePath = "./Dockerfile"
+watchPatterns = ["src/**", "package.json", "Dockerfile"]
+
+[deploy]
+restartPolicyType = "ON_FAILURE"

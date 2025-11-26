@@ -1,3 +1,6 @@
+# Cache buster - increment version to force full rebuild
+ARG CACHE_BUST=v2
+
 FROM node:20-alpine
 
 WORKDIR /app
