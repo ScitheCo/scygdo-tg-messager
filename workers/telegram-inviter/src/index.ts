@@ -116,8 +116,8 @@ async function getTelegramClient(account: any): Promise<TelegramClient | null> {
     try {
       const anySession = stringSession as any;
       const currentAddress = anySession.serverAddress as string | undefined;
-      if (currentAddress && currentAddress.includes('vesta.web.telegram.org')) {
-        log('warn', `Session for ${account.phone_number} uses vesta.web.telegram.org, resetting DC to production`);
+      if (currentAddress && currentAddress.includes('.web.telegram.org')) {
+        log('warn', `Session for ${account.phone_number} uses ${currentAddress}, resetting DC to production`);
         anySession.setDC(4, '149.154.167.91', 443);
       }
     } catch (e) {
