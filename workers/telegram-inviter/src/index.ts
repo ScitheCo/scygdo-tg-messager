@@ -762,13 +762,13 @@ async function processEmojiTask(task: any) {
           continue;
         }
 
-        // Handle view_only separately - just view the message without reaction
-        if (task_type === 'view_only') {
-          // Get the message to increase view count
-          await client.getMessages(groupEntity, {
-            ids: [parseInt(messageId)]
-          });
+        // First, view the message to try to increase the view count
+        await client.getMessages(groupEntity, {
+          ids: [parseInt(messageId)]
+        });
 
+        // If this is a pure view_only task, we stop here after logging
+        if (task_type === 'view_only') {
           const { error: logError } = await supabase.from('emoji_task_logs').insert({
             task_id: id,
             account_id: account.id,
