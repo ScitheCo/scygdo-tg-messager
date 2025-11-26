@@ -111,6 +111,19 @@ async function getTelegramClient(account: any): Promise<TelegramClient | null> {
     log('info', `🔌 Connecting account ${account.phone_number}...`);
     
     const stringSession = new StringSession(account.session_string || '');
+
+    // Fix sessions that were created in browser mode (vesta.web.telegram.org)
+    try {
+      const anySession = stringSession as any;
+      const currentAddress = anySession.serverAddress as string | undefined;
+      if (currentAddress && currentAddress.includes('vesta.web.telegram.org')) {
+        log('warn', `Session for ${account.phone_number} uses vesta.web.telegram.org, resetting DC to production`);
+        anySession.setDC(4, '149.154.167.91', 443);
+      }
+    } catch (e) {
+      log('debug', 'Session DC normalization failed', e);
+    }
+
     const client = new TelegramClient(
       stringSession,
       parseInt(account.telegram_api_credentials.api_id),
