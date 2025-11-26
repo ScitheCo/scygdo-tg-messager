@@ -5,6 +5,7 @@ import * as http from 'http';
 import { TelegramClient, Api } from 'telegram';
 import { StringSession } from 'telegram/sessions';
 import { PromisedNetSockets } from 'telegram/extensions';
+import { ConnectionTCPFull } from 'telegram/network';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import {
   ScrapingSession,
@@ -115,13 +116,14 @@ async function getTelegramClient(account: any): Promise<TelegramClient | null> {
       parseInt(account.telegram_api_credentials.api_id),
       account.telegram_api_credentials.api_hash,
       {
+        connection: ConnectionTCPFull,
+        networkSocket: PromisedNetSockets,
         connectionRetries: 5,
         retryDelay: 2000,
         autoReconnect: true,
         requestRetries: 3,
         useWSS: false,
-        testServers: false,
-        networkSocket: PromisedNetSockets
+        testServers: false
       }
     );
 
