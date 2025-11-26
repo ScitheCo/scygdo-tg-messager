@@ -2,7 +2,7 @@ import { useStore } from '@/store/useStore';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Users, CheckSquare, Square, Trash2, RefreshCw, TestTube2, AlertTriangle } from 'lucide-react';
+import { Users, CheckSquare, Square, Trash2, RefreshCw, AlertTriangle } from 'lucide-react';
 import { AddAccountDialog } from './AddAccountDialog';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { supabase } from '@/integrations/supabase/client';
@@ -317,16 +317,6 @@ export const AccountList = () => {
             )}
           </div>
           <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={handleTestSessions}
-              disabled={isTestingSession || accounts.length === 0}
-              className="h-8 text-xs"
-            >
-              <TestTube2 className="w-3 h-3 mr-1" />
-              {isTestingSession ? 'Test Ediliyor...' : 'Oturumları Test Et'}
-            </Button>
             <AddAccountDialog onAccountAdded={() => refetch()} />
             {activeAccounts.length > 0 && (
               <Button
@@ -388,13 +378,6 @@ export const AccountList = () => {
                       <Badge variant="default" className="text-xs bg-success">
                         Aktif
                       </Badge>
-                      {(() => {
-                        const health = getAccountHealth(account.id);
-                        if (health?.status) {
-                          return getHealthBadge(health.status);
-                        }
-                        return null;
-                      })()}
                       {(() => {
                         const limitStatus = getAccountLimitStatus(account.id);
                         if (limitStatus && limitStatus.members_added_today >= 50) {

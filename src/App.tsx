@@ -6,7 +6,6 @@ import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import Index from "./pages/Index";
 import Login from "./pages/Login";
 import EmojiPanel from "./pages/EmojiPanel";
-import AccountHealthDashboard from "./pages/AccountHealthDashboard";
 import NotFound from "./pages/NotFound";
 import { useAuth } from "./hooks/useAuth";
 
@@ -55,14 +54,6 @@ const App = () => (
             element={
               <ProtectedRoute requireSuperAdmin={true}>
                 <EmojiPanel />
-              </ProtectedRoute>
-            }
-          />
-          <Route
-            path="/account-health"
-            element={
-              <ProtectedRoute>
-                <AccountHealthDashboard />
               </ProtectedRoute>
             }
           />
