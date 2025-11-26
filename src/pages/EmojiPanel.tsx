@@ -64,6 +64,7 @@ export default function EmojiPanel() {
   const [stats, setStats] = useState({
     total: 0,
     queued: 0,
+    processing: 0,
     completed: 0,
     failed: 0,
   });
@@ -81,9 +82,10 @@ export default function EmojiPanel() {
     // Calculate stats
     const total = tasks.length;
     const queued = tasks.filter(t => t.status === 'queued').length;
+    const processing = tasks.filter(t => t.status === 'processing').length;
     const completed = tasks.filter(t => t.status === 'completed').length;
     const failed = tasks.filter(t => t.status === 'failed').length;
-    setStats({ total, queued, completed, failed });
+    setStats({ total, queued, processing, completed, failed });
   }, [tasks]);
 
   const subscribeToChanges = () => {
@@ -377,7 +379,7 @@ export default function EmojiPanel() {
         </Card>
 
         {/* Stats */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
           <Card>
             <CardHeader className="pb-3">
               <CardTitle className="text-sm font-medium text-muted-foreground">Toplam Görev</CardTitle>
@@ -392,6 +394,14 @@ export default function EmojiPanel() {
             </CardHeader>
             <CardContent>
               <div className="text-3xl font-bold text-yellow-500">{stats.queued}</div>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground">İşleniyor</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="text-3xl font-bold text-blue-500">{stats.processing}</div>
             </CardContent>
           </Card>
           <Card>
@@ -510,13 +520,28 @@ export default function EmojiPanel() {
                         <Badge variant="outline">{getTaskTypeBadge(task.task_type)}</Badge>
                       </TableCell>
                       <TableCell>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm">{task.requested_count}/{task.available_count}</span>
-                          <div className="w-20 bg-muted rounded-full h-2">
-                            <div 
-                              className="bg-primary h-2 rounded-full transition-all"
-                              style={{ width: `${(task.total_success / task.requested_count) * 100}%` }}
-                            />
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium">
+                              {task.total_success + task.total_failed}/{task.requested_count}
+                            </span>
+                            <span className="text-xs text-muted-foreground">
+                              ({Math.round(((task.total_success + task.total_failed) / task.requested_count) * 100)}%)
+                            </span>
+                          </div>
+                          <div className="w-32 bg-muted rounded-full h-2.5 overflow-hidden">
+                            <div className="flex h-full">
+                              <div 
+                                className="bg-green-500 transition-all duration-300"
+                                style={{ width: `${(task.total_success / task.requested_count) * 100}%` }}
+                                title={`Başarılı: ${task.total_success}`}
+                              />
+                              <div 
+                                className="bg-red-500 transition-all duration-300"
+                                style={{ width: `${(task.total_failed / task.requested_count) * 100}%` }}
+                                title={`Başarısız: ${task.total_failed}`}
+                              />
+                            </div>
                           </div>
                         </div>
                       </TableCell>

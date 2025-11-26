@@ -112,6 +112,51 @@ async function handleMessage(supabase: any, message: any) {
     return;
   }
 
+  if (text === '/status') {
+    if (!authorized) {
+      await sendMessage(chatId, '⛔ Yetkiniz yok. Lütfen panel yöneticisine başvurun.');
+      return;
+    }
+
+    // Get user's active tasks
+    const { data: activeTasks } = await supabase
+      .from('emoji_tasks')
+      .select('id, task_type, status, queue_number, requested_count, total_success, total_failed, created_at, post_link')
+      .eq('telegram_user_id', userId)
+      .in('status', ['queued', 'processing'])
+      .order('created_at', { ascending: false })
+      .limit(10);
+
+    if (!activeTasks || activeTasks.length === 0) {
+      await sendMessage(chatId, '📊 <b>Aktif Görev Durumu</b>\n\n✅ Aktif veya bekleyen göreviniz yok.\n\n💡 Yeni görev oluşturmak için /start komutunu kullanın.', true);
+      return;
+    }
+
+    let statusMessage = '📊 <b>Aktif Görevleriniz</b>\n\n';
+    
+    for (const task of activeTasks) {
+      const progress = task.requested_count > 0 
+        ? Math.round(((task.total_success + task.total_failed) / task.requested_count) * 100)
+        : 0;
+      
+      const statusIcon = task.status === 'queued' ? '⏳' : '🔄';
+      const taskType = getTaskTypeDisplay(task.task_type);
+      
+      statusMessage += `${statusIcon} <b>Görev #${task.queue_number}</b>\n`;
+      statusMessage += `├ 🎯 Tip: ${taskType}\n`;
+      statusMessage += `├ 📈 İlerleme: ${progress}% (${task.total_success + task.total_failed}/${task.requested_count})\n`;
+      statusMessage += `├ ✅ Başarılı: ${task.total_success}\n`;
+      statusMessage += `├ ❌ Başarısız: ${task.total_failed}\n`;
+      statusMessage += `├ 📅 Oluşturulma: ${new Date(task.created_at).toLocaleString('tr-TR', { hour: '2-digit', minute: '2-digit' })}\n`;
+      statusMessage += `└ 🔗 ${task.post_link.substring(0, 40)}...\n\n`;
+    }
+
+    statusMessage += '💡 Detaylı bilgi için web panelini ziyaret edin.';
+    
+    await sendMessage(chatId, statusMessage, true);
+    return;
+  }
+
   // Get conversation state
   const { data: state } = await supabase
     .from('bot_conversation_states')
@@ -382,12 +427,26 @@ async function handleCallbackQuery(supabase: any, callbackQuery: any) {
   }
 }
 
-async function sendMessage(chatId: number, text: string) {
+async function sendMessage(chatId: number, text: string, parseHtml = false) {
   await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ chat_id: chatId, text }),
+    body: JSON.stringify({ 
+      chat_id: chatId, 
+      text,
+      parse_mode: parseHtml ? 'HTML' : undefined
+    }),
   });
+}
+
+function getTaskTypeDisplay(type: string): string {
+  const types: Record<string, string> = {
+    positive_emoji: '📈 Pozitif Emoji',
+    negative_emoji: '📉 Negatif Emoji',
+    view_only: '👁️ Görüntüleme',
+    custom_emoji: '🎨 Özel Emoji',
+  };
+  return types[type] || type;
 }
 
 async function sendMessageWithKeyboard(chatId: number, text: string, keyboard: any[]) {
