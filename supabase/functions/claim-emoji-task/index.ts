@@ -50,7 +50,7 @@ serve(async (req) => {
       .eq('status', 'processing')
       .eq('assigned_worker_id', worker_id)
       .eq('processing_mode', 'desktop_worker')
-      .lt('started_at', new Date(Date.now() - 60000).toISOString()) // Stuck for >1 min
+      .lt('started_at', new Date(Date.now() - 600000).toISOString()) // Stuck for >10 min
       .order('started_at', { ascending: true })
       .limit(1)
       .single();

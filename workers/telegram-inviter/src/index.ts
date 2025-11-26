@@ -694,6 +694,12 @@ async function processEmojiTask(task: any) {
     const [_, groupIdentifier, messageId] = linkMatch;
 
     for (const account of accounts) {
+      // CRITICAL: Stop if we've reached the requested count
+      if (successCount + failCount >= requested_count) {
+        log('info', `✋ Requested count (${requested_count}) reached. Stopping. Success: ${successCount}, Failed: ${failCount}`);
+        break;
+      }
+
       if (processed_account_ids.includes(account.id)) continue;
 
       try {
