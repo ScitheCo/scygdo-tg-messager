@@ -1,7 +1,8 @@
-# Cache buster - increment version to force full rebuild
-ARG CACHE_BUST=v2
-
 FROM node:20-alpine
+
+# Cache buster - must be AFTER FROM and USED in a RUN to invalidate layers
+ARG CACHE_BUST=v3
+RUN echo "Build version: $CACHE_BUST - $(date)"
 
 WORKDIR /app
 
