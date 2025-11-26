@@ -43,6 +43,50 @@ serve(async (req) => {
       );
     }
 
+    // First, check for stuck tasks assigned to this worker (recovery mechanism)
+    const { data: stuckTask } = await supabase
+      .from('emoji_tasks')
+      .select('*')
+      .eq('status', 'processing')
+      .eq('assigned_worker_id', worker_id)
+      .eq('processing_mode', 'desktop_worker')
+      .lt('started_at', new Date(Date.now() - 60000).toISOString()) // Stuck for >1 min
+      .order('started_at', { ascending: true })
+      .limit(1)
+      .single();
+
+    if (stuckTask) {
+      console.log(`Recovering stuck task ${stuckTask.id} for worker ${worker_id}`);
+      
+      // Get accounts and processed logs for stuck task
+      const { data: accounts } = await supabase
+        .from('telegram_accounts')
+        .select(`
+          *,
+          telegram_api_credentials (api_id, api_hash)
+        `)
+        .eq('is_active', true);
+
+      const { data: processedLogs } = await supabase
+        .from('emoji_task_logs')
+        .select('account_id')
+        .eq('task_id', stuckTask.id)
+        .eq('status', 'success');
+
+      const processedAccountIds = processedLogs?.map(log => log.account_id) || [];
+
+      return new Response(
+        JSON.stringify({
+          task: {
+            ...stuckTask,
+            accounts: accounts || [],
+            processed_account_ids: processedAccountIds
+          }
+        }),
+        { headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
+      );
+    }
+
     // Get next queued task
     const { data: task, error: taskError } = await supabase
       .from('emoji_tasks')
