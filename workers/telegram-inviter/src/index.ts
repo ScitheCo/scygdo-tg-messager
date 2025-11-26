@@ -657,12 +657,12 @@ async function pollEmojiTasks() {
 async function sendTelegramNotification(chatId: number, message: string) {
   const TELEGRAM_BOT_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
   if (!TELEGRAM_BOT_TOKEN) {
-    log('warn', 'TELEGRAM_BOT_TOKEN not set, skipping notification');
-    return;
+    log('error', '❌ TELEGRAM_BOT_TOKEN not set! Cannot send notification. Please set this in Railway environment variables.');
+    return false;
   }
   
   try {
-    await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
+    const response = await fetch(`https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ 
@@ -671,9 +671,18 @@ async function sendTelegramNotification(chatId: number, message: string) {
         parse_mode: 'HTML' 
       })
     });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      log('error', `❌ Telegram API error: ${response.status} - ${errorText}`);
+      return false;
+    }
+    
     log('info', `✅ Notification sent to chat ${chatId}`);
+    return true;
   } catch (error) {
-    log('error', 'Failed to send Telegram notification', error);
+    log('error', '❌ Failed to send Telegram notification', error);
+    return false;
   }
 }
 
@@ -736,7 +745,7 @@ async function processEmojiTask(task: any) {
         }
 
         if (!groupEntity) {
-          await supabase.from('emoji_task_logs').insert({
+          const { error: logError } = await supabase.from('emoji_task_logs').insert({
             task_id: id,
             account_id: account.id,
             action_type: task_type,
@@ -744,6 +753,11 @@ async function processEmojiTask(task: any) {
             error_message: `Group '${groupIdentifier}' not found or not accessible`,
             worker_id: WORKER_ID
           });
+          
+          if (logError) {
+            log('error', `❌ Failed to insert group not found log for ${account.phone_number}:`, logError);
+          }
+          
           failCount++;
           continue;
         }
@@ -769,7 +783,7 @@ async function processEmojiTask(task: any) {
           })
         );
 
-        await supabase.from('emoji_task_logs').insert({
+        const { error: logError } = await supabase.from('emoji_task_logs').insert({
           task_id: id,
           account_id: account.id,
           action_type: task_type,
@@ -778,20 +792,28 @@ async function processEmojiTask(task: any) {
           worker_id: WORKER_ID
         });
 
+        if (logError) {
+          log('error', `❌ Failed to insert success log for ${account.phone_number}:`, logError);
+        }
+
         successCount++;
         log('info', `✅ Reaction sent: ${account.phone_number} → ${emoji}`);
 
         // Real-time progress update after each account
-        await supabase.from('emoji_tasks').update({
+        const { error: updateError } = await supabase.from('emoji_tasks').update({
           total_success: successCount,
           total_failed: failCount
         }).eq('id', id);
+
+        if (updateError) {
+          log('error', `❌ Failed to update task progress:`, updateError);
+        }
 
         await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 3000));
 
       } catch (error: any) {
         const errorMsg = error.errorMessage || error.message || 'Unknown error';
-        await supabase.from('emoji_task_logs').insert({
+        const { error: logError } = await supabase.from('emoji_task_logs').insert({
           task_id: id,
           account_id: account.id,
           action_type: task_type,
@@ -799,23 +821,36 @@ async function processEmojiTask(task: any) {
           error_message: errorMsg,
           worker_id: WORKER_ID
         });
+        
+        if (logError) {
+          log('error', `❌ Failed to insert error log for ${account.phone_number}:`, logError);
+        }
+        
         failCount++;
         log('error', `❌ Reaction failed for ${account.phone_number}: ${errorMsg}`);
         
         // Real-time progress update after each failure
-        await supabase.from('emoji_tasks').update({
+        const { error: updateError } = await supabase.from('emoji_tasks').update({
           total_success: successCount,
           total_failed: failCount
         }).eq('id', id);
+        
+        if (updateError) {
+          log('error', `❌ Failed to update task progress after failure:`, updateError);
+        }
       }
     }
 
-    await supabase.from('emoji_tasks').update({
+    const { error: completionError } = await supabase.from('emoji_tasks').update({
       status: 'completed',
       completed_at: new Date().toISOString(),
       total_success: successCount,
       total_failed: failCount
     }).eq('id', id);
+
+    if (completionError) {
+      log('error', `❌ Failed to mark task as completed:`, completionError);
+    }
 
     log('info', `✅ Emoji task completed: ${successCount} success, ${failCount} failed`);
     
@@ -839,13 +874,17 @@ ${failCount > 0 ? '💡 Başarısız hesaplar log panelinde görüntülenebilir.
 
   } catch (error: any) {
     log('error', 'Emoji task processing error', error);
-    await supabase.from('emoji_tasks').update({
+    const { error: failureError } = await supabase.from('emoji_tasks').update({
       status: 'failed',
       error_message: error.message,
       completed_at: new Date().toISOString(),
       total_success: successCount,
       total_failed: failCount
     }).eq('id', id);
+    
+    if (failureError) {
+      log('error', `❌ Failed to mark task as failed:`, failureError);
+    }
     
     // Send failure notification
     const notificationMessage = `❌ <b>Görev Başarısız!</b>
