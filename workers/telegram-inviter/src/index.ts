@@ -762,6 +762,43 @@ async function processEmojiTask(task: any) {
           continue;
         }
 
+        // Handle view_only separately - just view the message without reaction
+        if (task_type === 'view_only') {
+          // Get the message to increase view count
+          await client.getMessages(groupEntity, {
+            ids: [parseInt(messageId)]
+          });
+
+          const { error: logError } = await supabase.from('emoji_task_logs').insert({
+            task_id: id,
+            account_id: account.id,
+            action_type: task_type,
+            emoji_used: null,
+            status: 'success',
+            worker_id: WORKER_ID
+          });
+
+          if (logError) {
+            log('error', `❌ Failed to insert view_only success log for ${account.phone_number}:`, logError);
+          }
+
+          successCount++;
+          log('info', `👁️ Message viewed: ${account.phone_number}`);
+
+          // Real-time progress update after each account
+          const { error: updateError } = await supabase.from('emoji_tasks').update({
+            total_success: successCount,
+            total_failed: failCount
+          }).eq('id', id);
+
+          if (updateError) {
+            log('error', `❌ Failed to update task progress:`, updateError);
+          }
+
+          await new Promise(resolve => setTimeout(resolve, 2000 + Math.random() * 3000));
+          continue; // Skip emoji sending
+        }
+
         // Determine emoji based on task type
         let emoji = '👍';
         if (task_type === 'positive_emoji') {

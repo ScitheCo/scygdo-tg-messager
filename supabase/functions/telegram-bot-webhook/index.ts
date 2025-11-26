@@ -305,7 +305,7 @@ async function handleConversationStep(supabase: any, state: any, message: any) {
         .from('worker_heartbeats')
         .select('worker_id, status')
         .eq('worker_id', 'telegram-inviter')
-        .gte('last_seen', new Date(Date.now() - 60000).toISOString())
+        .gte('last_seen', new Date(Date.now() - 120000).toISOString())
         .single();
 
       // Block task creation if worker is not online
